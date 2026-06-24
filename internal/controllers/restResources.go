@@ -11,6 +11,7 @@ import (
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client/apiaction"
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client/builder"
 	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/krateoplatformops/plumbing/kubeutil/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
@@ -28,6 +29,13 @@ var _ controller.ExternalClient = (*handler)(nil)
 
 var (
 	ErrStatusNotFound = errors.New("status not found")
+)
+
+// Event reasons emitted on the reconciled dynamic CR.
+const (
+	reasonCreated event.Reason = "ResourceCreated"
+	reasonUpdated event.Reason = "ResourceUpdated"
+	reasonDeleted event.Reason = "ResourceDeleted"
 )
 
 func NewHandler(cfg *rest.Config, log logging.Logger, swg getter.Getter, pluralizer pluralizer.PluralizerInterface, prettyJSONDebug bool) controller.ExternalClient {
@@ -50,6 +58,10 @@ func NewHandler(cfg *rest.Config, log logging.Logger, swg getter.Getter, plurali
 		discoveryClient:   dis,
 		swaggerInfoGetter: swg,
 		prettyJSONDebug:   prettyJSONDebug,
+		// Default to a no-op recorder so events are always safe to emit even
+		// when an API-backed recorder is not wired in (e.g. in tests). main.go
+		// injects the real recorder via SetEventRecorder.
+		eventRecorder: event.NewNopRecorder(),
 	}
 }
 
@@ -60,6 +72,15 @@ type handler struct {
 	discoveryClient   *discovery.DiscoveryClient
 	swaggerInfoGetter getter.Getter
 	prettyJSONDebug   bool
+	eventRecorder     event.Recorder
+}
+
+// SetEventRecorder wires a Kubernetes Event recorder used to emit Events on the
+// reconciled dynamic CR. A nil recorder is ignored (the no-op default is kept).
+func (h *handler) SetEventRecorder(rec event.Recorder) {
+	if rec != nil {
+		h.eventRecorder = rec
+	}
 }
 
 func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (controller.ExternalObservation, error) {
@@ -395,9 +416,11 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	})
 	if err != nil {
 		log.Error(err, "Updating status")
+		h.eventRecorder.Event(mg, event.Warning(reasonCreated, "Create", err))
 		return err
 	}
 
+	h.eventRecorder.Event(mg, event.Normal(reasonCreated, "Create", fmt.Sprintf("Created external resource: %s", mg.GetName())))
 	return nil
 }
 
@@ -491,11 +514,13 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 	})
 	if err != nil {
 		log.Error(err, "Updating status")
+		h.eventRecorder.Event(mg, event.Warning(reasonUpdated, "Update", err))
 		return err
 	}
 
 	log.Debug("Custom resource values updated", "kind", mg.GetKind())
 
+	h.eventRecorder.Event(mg, event.Normal(reasonUpdated, "Update", fmt.Sprintf("Updated external resource: %s", mg.GetName())))
 	return nil
 }
 
@@ -566,6 +591,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	_, err = apiCall(ctx, &http.Client{}, callInfo.Path, reqConfiguration)
 	if err != nil {
 		log.Error(err, "Performing REST call")
+		h.eventRecorder.Event(mg, event.Warning(reasonDeleted, "Delete", err))
 		return err
 	}
 
@@ -577,5 +603,6 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		return err
 	}
 
+	h.eventRecorder.Event(mg, event.Normal(reasonDeleted, "Delete", fmt.Sprintf("Deleted external resource: %s", mg.GetName())))
 	return nil
 }
