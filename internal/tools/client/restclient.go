@@ -10,10 +10,12 @@ import (
 	"net/http/httputil"
 	"os"
 	"strings"
+	"time"
 
 	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/pagination"
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/pathparsing"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	rawyaml "gopkg.in/yaml.v3"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -101,6 +103,9 @@ func (u *UnstructuredClient) Call(ctx context.Context, cli *http.Client, path st
 		Body:   io.NopCloser(bytes.NewReader(payload)),
 		Header: headers,
 	}
+	// Carry the reconcile span on the request so the otelhttp transport emits a
+	// child client span and injects a W3C traceparent (continuing the trace).
+	req = req.WithContext(ctx)
 
 	for k, v := range opts.Cookies {
 		req.AddCookie(&http.Cookie{Name: k, Value: v})
@@ -113,6 +118,9 @@ func (u *UnstructuredClient) Call(ctx context.Context, cli *http.Client, path st
 			PrettyJSON: u.PrettyJSON,
 		}
 	}
+	// Wrap the (possibly debug) transport with otelhttp so outbound calls to the
+	// managed external API are trace-instrumented. No-op when tracing is disabled.
+	cli.Transport = instrumentTransport(cli.Transport)
 
 	if u.SetAuth != nil {
 		u.SetAuth(req)
@@ -133,10 +141,13 @@ func (u *UnstructuredClient) Call(ctx context.Context, cli *http.Client, path st
 	//	}
 	//}
 
+	start := time.Now()
 	resp, err := cli.Do(req)
 	if err != nil {
+		recordOutboundCall(ctx, httpMethod, path, 0, start)
 		return Response{}, fmt.Errorf("making request: %w", err)
 	}
+	recordOutboundCall(ctx, httpMethod, path, resp.StatusCode, start)
 	defer resp.Body.Close()
 
 	getDoc, ok := pathItem.GetOperations().Get(strings.ToLower(httpMethod))
@@ -379,9 +390,19 @@ func (u *UnstructuredClient) CallForPagination(ctx context.Context, cli *http.Cl
 		Body:   io.NopCloser(bytes.NewReader(payload)),
 		Header: headers,
 	}
+	// Carry the reconcile span on the request so the otelhttp transport emits a
+	// child client span and injects a W3C traceparent (continuing the trace).
+	req = req.WithContext(ctx)
 
 	for k, v := range opts.Cookies {
 		req.AddCookie(&http.Cookie{Name: k, Value: v})
+	}
+
+	// Ensure outbound calls are trace-instrumented. FindBy installs the debug
+	// transport once before the pagination loop; wrap with otelhttp idempotently
+	// so paginated pages don't stack transports. No-op when tracing is disabled.
+	if _, ok := cli.Transport.(*otelhttp.Transport); !ok {
+		cli.Transport = instrumentTransport(cli.Transport)
 	}
 
 	if u.SetAuth != nil {
@@ -393,10 +414,13 @@ func (u *UnstructuredClient) CallForPagination(ctx context.Context, cli *http.Cl
 		return Response{}, nil, fmt.Errorf("paginator failed to update request: %w", err)
 	}
 
+	start := time.Now()
 	resp, err := cli.Do(req)
 	if err != nil {
+		recordOutboundCall(ctx, httpMethod, path, 0, start)
 		return Response{}, nil, fmt.Errorf("making request: %w", err)
 	}
+	recordOutboundCall(ctx, httpMethod, path, resp.StatusCode, start)
 	defer resp.Body.Close()
 
 	getDoc, ok := pathItem.GetOperations().Get(strings.ToLower(httpMethod))
