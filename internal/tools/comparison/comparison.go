@@ -329,6 +329,20 @@ func InferType(value string) any {
 					return i
 				}
 				if f, err := v.Float64(); err == nil {
+					// A whole-number float in int64 range must normalize to an
+					// integer. Large integers (e.g. a byte-sized disk size or
+					// memory) are printed by fmt "%v" in exponential form
+					// ("2.147483648e+10"), which json.Number.Int64() rejects; without
+					// this an int64 CR value and the same number decoded as float64
+					// from an API response would compare unequal, causing perpetual
+					// spurious drift on every int64 field.
+					if f == math.Trunc(f) && f >= math.MinInt64 && f <= math.MaxInt64 {
+						if i := int64(f); i >= math.MinInt32 && i <= math.MaxInt32 {
+							return int32(i)
+						} else {
+							return i
+						}
+					}
 					return f
 				}
 			default:
