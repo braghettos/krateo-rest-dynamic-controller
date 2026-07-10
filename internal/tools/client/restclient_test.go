@@ -1206,3 +1206,34 @@ func TestIsItemMatch(t *testing.T) {
 		})
 	}
 }
+
+func TestCall_TolerateCodes(t *testing.T) {
+	handler404 := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "not found"})
+	}
+
+	t.Run("404 tolerated -> empty success", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(handler404))
+		defer srv.Close()
+		client := createTestClient(t)
+		client.Server = srv.URL
+
+		resp, err := client.Call(context.Background(), srv.Client(), "/api/test",
+			&RequestConfiguration{Method: "GET", TolerateCodes: []int{404}})
+		require.NoError(t, err, "a tolerated 404 must not error")
+		assert.Nil(t, resp.ResponseBody, "tolerated response body is empty")
+	})
+
+	t.Run("404 not tolerated -> error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(handler404))
+		defer srv.Close()
+		client := createTestClient(t)
+		client.Server = srv.URL
+
+		_, err := client.Call(context.Background(), srv.Client(), "/api/test",
+			&RequestConfiguration{Method: "GET"})
+		require.Error(t, err, "an untolerated 404 must error")
+	})
+}

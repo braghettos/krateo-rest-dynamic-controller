@@ -103,6 +103,8 @@ type RequestConfiguration struct {
 	Cookies    map[string]string
 	Body       any
 	Method     string
+	// TolerateCodes are HTTP status codes to treat as a successful empty response instead of an error.
+	TolerateCodes []int
 }
 
 // isInResource is a method used during a "FindBy" operation.
