@@ -153,6 +153,8 @@ type VerbsDescription struct {
 	TolerateCodes []int `json:"tolerateCodes,omitempty"`
 	// NotFoundCodes are status codes remapped to a not-found result for this verb.
 	NotFoundCodes []int `json:"notFoundCodes,omitempty"`
+	// Async declares long-running-operation handling for this mutating verb.
+	Async *AsyncConfig `json:"async,omitempty"`
 }
 
 // HeaderItem is a single static HTTP header injected on every request for a verb.
@@ -165,6 +167,32 @@ type HeaderItem struct {
 type QueryParam struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
+}
+
+// AsyncConfig is the runtime mirror of the RestDefinition async/LRO configuration.
+type AsyncConfig struct {
+	OperationRef OperationRef `json:"operationRef"`
+	Poll         PollConfig   `json:"poll"`
+	PostGet      bool         `json:"postGet,omitempty"`
+}
+
+// OperationRef mirrors how to extract the async operation handle from the trigger response.
+type OperationRef struct {
+	In   string     `json:"in"`
+	Path string     `json:"path"`
+	JQ   *JQProgram `json:"jq,omitempty"`
+}
+
+// PollConfig mirrors the polling endpoint and its terminal semantics.
+type PollConfig struct {
+	Method          string   `json:"method,omitempty"`
+	Path            string   `json:"path"`
+	StatusPath      string   `json:"statusPath"`
+	SuccessValues   []string `json:"successValues"`
+	FailureValues   []string `json:"failureValues,omitempty"`
+	IntervalSeconds int      `json:"intervalSeconds,omitempty"`
+	MaxAttempts     int      `json:"maxAttempts,omitempty"`
+	TimeoutSeconds  int      `json:"timeoutSeconds,omitempty"`
 }
 
 type Resource struct {
