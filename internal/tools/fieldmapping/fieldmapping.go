@@ -48,14 +48,39 @@ func NormalizeResponseBody(ctx context.Context, verbs []getter.VerbsDescription,
 			return err
 		}
 	}
-	// 2) Per-entry response field mappings.
+	// 2) Per-entry response field mappings, in two phases so an earlier entry that lifts a path cannot
+	//    delete a later entry's source before it is read: resolve every value first (no mutation), then
+	//    write, then remove lifted sources.
+	var resolved []resolvedEntry
 	for _, entry := range responseEntries(verbs, actions) {
-		if err := applyResponseEntry(ctx, entry, body); err != nil {
+		r, ok, err := resolveResponseEntry(ctx, entry, body)
+		if err != nil {
 			return err
 		}
+		if ok {
+			resolved = append(resolved, r)
+		}
+	}
+	dstKeys := make(map[string]bool, len(resolved))
+	for _, r := range resolved {
+		dstKeys[pathKey(r.dst)] = true
+	}
+	for _, r := range resolved {
+		if err := unstructured.SetNestedField(body, r.val, r.dst...); err != nil {
+			return fmt.Errorf("setting normalized field: %w", err)
+		}
+	}
+	for _, r := range resolved {
+		// Never remove an in-place transform, nor a source that another entry writes to (chained relocation).
+		if equalPath(r.src, r.dst) || dstKeys[pathKey(r.src)] {
+			continue
+		}
+		unstructured.RemoveNestedField(body, r.src...)
 	}
 	return nil
 }
+
+func pathKey(p []string) string { return strings.Join(p, "\x00") }
 
 // documentResponseTransforms collects the inline whole-document responseTransform programs from the verbs
 // whose action matches any of the requested actions, preserving order. Module-ref transforms are deferred.
@@ -117,18 +142,29 @@ func responseEntries(verbs []getter.VerbsDescription, actions []string) []getter
 	return out
 }
 
-func applyResponseEntry(ctx context.Context, entry getter.FieldMappingItem, body map[string]interface{}) error {
-	if entry.InResponse == "" || entry.InCustomResource == "" {
-		return nil
-	}
+// resolvedEntry is a response mapping whose value has been read and transformed but not yet written.
+type resolvedEntry struct {
+	src []string
+	dst []string
+	val interface{}
+}
 
+// resolveResponseEntry reads the source value for a response entry, applies its value transform (Tier-1
+// alias or Tier-2 inline jq), and canonicalizes the result — WITHOUT mutating the body. It returns
+// ok=false when the entry is not applicable (missing anchor, source not present, or a deferred module-ref
+// jq). Canonicalizing here guarantees SetNestedField never panics on a non-JSON value on any write path
+// (the alias/relocate path can otherwise carry a raw int/int64/yaml-decoded value).
+func resolveResponseEntry(ctx context.Context, entry getter.FieldMappingItem, body map[string]interface{}) (resolvedEntry, bool, error) {
+	if entry.InResponse == "" || entry.InCustomResource == "" {
+		return resolvedEntry{}, false, nil
+	}
 	srcPath, err := pathparsing.ParsePath(entry.InResponse)
 	if err != nil || len(srcPath) == 0 {
-		return nil
+		return resolvedEntry{}, false, nil
 	}
 	val, found, err := unstructured.NestedFieldNoCopy(body, srcPath...)
 	if err != nil || !found {
-		return nil
+		return resolvedEntry{}, false, nil
 	}
 
 	if entry.ValueMapping != nil {
@@ -139,15 +175,15 @@ func applyResponseEntry(ctx context.Context, entry getter.FieldMappingItem, body
 			jq := entry.ValueMapping.JQ
 			if jq == nil || jq.Inline == "" {
 				// Module-referenced (ref:) jq is not yet supported; leave the entry unapplied.
-				return nil
+				return resolvedEntry{}, false, nil
 			}
 			prog, cErr := jqengine.Compile(jq.Inline)
 			if cErr != nil {
-				return fmt.Errorf("compiling jq for response field %q: %w", entry.InResponse, cErr)
+				return resolvedEntry{}, false, fmt.Errorf("compiling jq for response field %q: %w", entry.InResponse, cErr)
 			}
 			out, rErr := prog.Run(ctx, val)
 			if rErr != nil {
-				return fmt.Errorf("running jq for response field %q: %w", entry.InResponse, rErr)
+				return resolvedEntry{}, false, fmt.Errorf("running jq for response field %q: %w", entry.InResponse, rErr)
 			}
 			val = out
 		}
@@ -155,17 +191,14 @@ func applyResponseEntry(ctx context.Context, entry getter.FieldMappingItem, body
 
 	dstPath, err := bodyRelativePath(entry.InCustomResource)
 	if err != nil || len(dstPath) == 0 {
-		return nil
+		return resolvedEntry{}, false, nil
 	}
 
-	if err := unstructured.SetNestedField(body, val, dstPath...); err != nil {
-		return fmt.Errorf("setting normalized field %q: %w", entry.InCustomResource, err)
+	val, err = jqengine.Canonical(val)
+	if err != nil {
+		return resolvedEntry{}, false, fmt.Errorf("canonicalizing normalized field %q: %w", entry.InCustomResource, err)
 	}
-	// The "lift": when the value moved to a different location, drop the stale source path.
-	if !equalPath(srcPath, dstPath) {
-		unstructured.RemoveNestedField(body, srcPath...)
-	}
-	return nil
+	return resolvedEntry{src: srcPath, dst: dstPath, val: val}, true, nil
 }
 
 // applyAlias rewrites a value across the CR<->API boundary using a finite set of bidirectional pairs.

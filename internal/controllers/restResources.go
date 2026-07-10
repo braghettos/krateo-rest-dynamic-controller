@@ -141,6 +141,9 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 	// Tries to tries to build the `get` action API Call, with the given statusFields and specFields values.
 	// If it is able to validate the `get` action request, returns true
 	isKnown := builder.IsResourceKnown(cli, clientInfo, mg)
+	// The observed body comes from exactly one verb (get XOR findby); response normalization must use only
+	// that verb's fieldMapping, never both, or the other verb's transforms would be misapplied to it.
+	observeAction := "get"
 	if isKnown {
 		// Resource is known: getting the external resource by its identifier (e.g GET /resources/{id}).
 		apiCall, callInfo, err := builder.APICallBuilder(cli, clientInfo, apiaction.Get)
@@ -178,6 +181,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 			return controller.ExternalObservation{}, err
 		}
 	} else {
+		observeAction = "findby"
 		// Resource is not known, we try to find it by its identifiers fields with a `findby` action,
 		// typically searching in the items returned by a "list" API call (e.g GET /resources).
 		// This is typically used when the resource does not have an server-side generated identifier (e.g., ID, UUID) yet,
@@ -276,7 +280,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 	}
 	// Normalize the observed body into the CR-domain shape (response fieldMapping) before it feeds both
 	// status population and drift comparison, so those keep working unchanged.
-	if err := fieldmapping.NormalizeResponseBody(ctx, clientInfo.Resource.VerbsDescription, []string{"get", "findby"}, b); err != nil {
+	if err := fieldmapping.NormalizeResponseBody(ctx, clientInfo.Resource.VerbsDescription, []string{observeAction}, b); err != nil {
 		log.Error(err, "Normalizing response body (fieldMapping)")
 		return controller.ExternalObservation{}, err
 	}

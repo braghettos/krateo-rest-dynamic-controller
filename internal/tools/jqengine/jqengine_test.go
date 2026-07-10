@@ -3,6 +3,7 @@ package jqengine
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -114,4 +115,40 @@ func TestJQ_RuntimeErrorSurfaced(t *testing.T) {
 	_, err := run(t, ".foo", "a string")
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "jq program error")
+}
+
+func TestJQ_DeniedClockBuiltins(t *testing.T) {
+	// now/localtime are nondeterministic and must fail closed, not flap the drift compare.
+	_, err := run(t, "now", nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "disabled")
+
+	_, err = run(t, "localtime", float64(0))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "disabled")
+
+	// A deterministic clock builtin given fixed input remains available.
+	out, err := run(t, "gmtime | type", float64(0))
+	require.NoError(t, err)
+	assert.Equal(t, "array", out)
+}
+
+func TestJQ_TimeoutAbortsPathologicalProgram(t *testing.T) {
+	p, err := Compile("until(false; .)")
+	require.NoError(t, err)
+	// A caller deadline earlier than DefaultTimeout wins, so the infinite loop is aborted promptly.
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = p.Run(ctx, map[string]interface{}{})
+	require.Error(t, err, "an unbounded program must be aborted, not hang")
+	assert.Less(t, time.Since(start), 3*time.Second, "must abort near the deadline")
+}
+
+func TestJQ_CompileCached(t *testing.T) {
+	p1, err := Compile(".a.b")
+	require.NoError(t, err)
+	p2, err := Compile(".a.b")
+	require.NoError(t, err)
+	assert.Same(t, p1, p2, "identical source must return the cached program")
 }

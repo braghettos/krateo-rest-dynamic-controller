@@ -99,3 +99,31 @@ func TestNormalizeResponseBody_MalformedJQIsError(t *testing.T) {
 	err := NormalizeResponseBody(context.Background(), verbs, []string{"get"}, body)
 	require.Error(t, err, "a malformed jq program must fail the reconcile, not silently pass")
 }
+
+func TestNormalizeResponseBody_NonJSONValueNoPanic(t *testing.T) {
+	// A raw Go int (not JSON float64) on the plain-relocate/alias path must be canonicalized before
+	// SetNestedField, which would otherwise panic via runtime.DeepCopyJSONValue.
+	body := map[string]interface{}{"count": int(5)}
+	verbs := getVerb(getter.FieldMappingItem{InResponse: "count", InCustomResource: "status.count_out"})
+
+	require.NotPanics(t, func() {
+		require.NoError(t, NormalizeResponseBody(context.Background(), verbs, []string{"get"}, body))
+	})
+	assert.Equal(t, float64(5), body["count_out"], "non-JSON int canonicalized to float64")
+}
+
+func TestNormalizeResponseBody_TwoPhaseLiftOrdering(t *testing.T) {
+	// entry 1 lifts the whole ancestor "a"; entry 2 reads a descendant "a.b". With a single-pass
+	// implementation entry 1's removal would delete entry 2's source before it is read. The two-phase
+	// resolve-then-write must let both land.
+	body := map[string]interface{}{"a": map[string]interface{}{"b": "deep"}}
+	verbs := getVerb(
+		getter.FieldMappingItem{InResponse: "a", InCustomResource: "status.whole"},
+		getter.FieldMappingItem{InResponse: "a.b", InCustomResource: "status.b"},
+	)
+
+	require.NoError(t, NormalizeResponseBody(context.Background(), verbs, []string{"get"}, body))
+
+	assert.Equal(t, map[string]interface{}{"b": "deep"}, body["whole"], "ancestor lifted as a whole")
+	assert.Equal(t, "deep", body["b"], "descendant source survived the sibling lift (two-phase)")
+}
