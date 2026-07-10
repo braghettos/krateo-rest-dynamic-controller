@@ -137,74 +137,12 @@ func CompareExisting(mg map[string]interface{}, rm map[string]interface{}, path 
 					},
 				}, fmt.Errorf("type assertion failed for slice at %s", pathStr)
 			}
-			// If the first slice is longer than the second, they are not equal.
-			// If the second slice is longer than the first, we ignore it because we are only comparing fields that exist in the first map.
-			if len(valueSlice) > len(rmSlice) {
-				return ComparisonResult{
-					IsEqual: false,
-					Reason: &Reason{
-						Reason:      "first slice is longer than second",
-						FirstValue:  value,
-						SecondValue: rmValue,
-					},
-				}, nil
+			res, err := compareSlices(valueSlice, rmSlice, currentPath)
+			if err != nil {
+				return res, err
 			}
-
-			for i, v := range valueSlice {
-				if reflect.TypeOf(v).Kind() == reflect.Map {
-					mgMap, ok1 := v.(map[string]interface{})
-					if !ok1 {
-						return ComparisonResult{
-							IsEqual: false,
-							Reason: &Reason{
-								Reason:      "type assertion failed",
-								FirstValue:  value,
-								SecondValue: rmValue,
-							},
-						}, fmt.Errorf("type assertion failed for map at %s", pathStr)
-					}
-					rmMap, ok2 := rmSlice[i].(map[string]interface{})
-					if !ok2 {
-						return ComparisonResult{
-							IsEqual: false,
-							Reason: &Reason{
-								Reason:      "type assertion failed",
-								FirstValue:  value,
-								SecondValue: rmValue,
-							},
-						}, fmt.Errorf("type assertion failed for map at %s", pathStr)
-					}
-					res, err := CompareExisting(mgMap, rmMap, currentPath...)
-					if err != nil {
-						return ComparisonResult{
-							IsEqual: false,
-							Reason: &Reason{
-								Reason:      "error comparing maps",
-								FirstValue:  value,
-								SecondValue: rmValue,
-							},
-						}, err
-					}
-					if !res.IsEqual {
-						return ComparisonResult{
-							IsEqual: false,
-							Reason: &Reason{
-								Reason:      "values differ",
-								FirstValue:  value,
-								SecondValue: rmValue,
-							},
-						}, nil
-					}
-				} else if v != rmSlice[i] {
-					return ComparisonResult{
-						IsEqual: false,
-						Reason: &Reason{
-							Reason:      "values differ",
-							FirstValue:  value,
-							SecondValue: rmValue,
-						},
-					}, nil
-				}
+			if !res.IsEqual {
+				return res, nil
 			}
 		default:
 			// Here we compare primary types (string, bool, numbers)
@@ -217,6 +155,109 @@ func CompareExisting(mg map[string]interface{}, rm map[string]interface{}, path 
 						FirstValue:  value,
 						SecondValue: rmValue,
 					},
+				}, nil
+			}
+		}
+	}
+
+	return ComparisonResult{IsEqual: true}, nil
+}
+
+// compareSlices compares two []interface{} element-by-element and in order, mirroring CompareExisting's
+// semantics: only the elements present in the first slice (the CR) are compared, so the second slice
+// (the observed remote value) may be longer. Nested maps recurse into CompareExisting and nested slices
+// recurse into compareSlices; primitive elements are compared with the same type-normalizing CompareAny
+// used for scalar fields.
+//
+// This closes two latent defects in the previous inline implementation:
+//   - primitive elements were compared with a raw `v != rmSlice[i]`, so an int64 CR value and the same
+//     number decoded as float64 from an API response (or a "true" string vs a bool) drifted forever
+//     inside arrays even though scalar fields already normalized them;
+//   - a nested slice element panicked, because `!=` on []interface{} is a runtime panic, and a nil
+//     element panicked on reflect.TypeOf(nil).Kind().
+func compareSlices(valueSlice, rmSlice []interface{}, path []string) (ComparisonResult, error) {
+	pathStr := fmt.Sprintf("%v", path)
+
+	// If the first slice is longer than the second, they are not equal. If the second slice is longer,
+	// we ignore the extra elements because we only compare fields that exist in the first map.
+	if len(valueSlice) > len(rmSlice) {
+		return ComparisonResult{
+			IsEqual: false,
+			Reason:  &Reason{Reason: "first slice is longer than second", FirstValue: valueSlice, SecondValue: rmSlice},
+		}, nil
+	}
+
+	for i, v := range valueSlice {
+		rmv := rmSlice[i]
+
+		// Nil handling: one nil and one non-nil differ; two nils are equal. Guards the
+		// reflect.TypeOf(nil).Kind() panic below.
+		if v == nil || rmv == nil {
+			if v == nil && rmv == nil {
+				continue
+			}
+			return ComparisonResult{
+				IsEqual: false,
+				Reason:  &Reason{Reason: "values differ (one is nil)", FirstValue: v, SecondValue: rmv},
+			}, nil
+		}
+
+		switch reflect.TypeOf(v).Kind() {
+		case reflect.Map:
+			mgMap, okMg := v.(map[string]interface{})
+			if !okMg {
+				return ComparisonResult{
+					IsEqual: false,
+					Reason:  &Reason{Reason: "type assertion failed", FirstValue: v, SecondValue: rmv},
+				}, fmt.Errorf("type assertion failed for map at %s", pathStr)
+			}
+			rmMap, okRm := rmv.(map[string]interface{})
+			if !okRm {
+				return ComparisonResult{
+					IsEqual: false,
+					Reason:  &Reason{Reason: "type assertion failed", FirstValue: v, SecondValue: rmv},
+				}, fmt.Errorf("type assertion failed for map at %s", pathStr)
+			}
+			res, err := CompareExisting(mgMap, rmMap, path...)
+			if err != nil {
+				return ComparisonResult{
+					IsEqual: false,
+					Reason:  &Reason{Reason: "error comparing maps", FirstValue: v, SecondValue: rmv},
+				}, err
+			}
+			if !res.IsEqual {
+				return ComparisonResult{
+					IsEqual: false,
+					Reason:  &Reason{Reason: "values differ", FirstValue: v, SecondValue: rmv},
+				}, nil
+			}
+		case reflect.Slice:
+			nestedV, okv := v.([]interface{})
+			if !okv {
+				return ComparisonResult{
+					IsEqual: false,
+					Reason:  &Reason{Reason: "type assertion failed", FirstValue: v, SecondValue: rmv},
+				}, fmt.Errorf("type assertion failed for nested slice at %s", pathStr)
+			}
+			nestedRM, okr := rmv.([]interface{})
+			if !okr {
+				return ComparisonResult{
+					IsEqual: false,
+					Reason:  &Reason{Reason: "values are not both slices or type assertion failed", FirstValue: v, SecondValue: rmv},
+				}, fmt.Errorf("type assertion failed for nested slice at %s", pathStr)
+			}
+			res, err := compareSlices(nestedV, nestedRM, path)
+			if err != nil {
+				return res, err
+			}
+			if !res.IsEqual {
+				return res, nil
+			}
+		default:
+			if !CompareAny(v, rmv) {
+				return ComparisonResult{
+					IsEqual: false,
+					Reason:  &Reason{Reason: "values differ", FirstValue: v, SecondValue: rmv},
 				}, nil
 			}
 		}
