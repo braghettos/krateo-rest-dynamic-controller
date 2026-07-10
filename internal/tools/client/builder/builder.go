@@ -33,6 +33,7 @@ type CallInfo struct {
 	RequestFieldMapping []getter.RequestFieldMappingItem // RequestFieldMapping is specific for the call (action)
 	Method              string
 	Action              apiaction.APIAction
+	Headers             []getter.HeaderItem // static per-verb headers to inject on the request
 }
 
 type APIFuncDef func(ctx context.Context, cli *http.Client, path string, conf *restclient.RequestConfiguration) (restclient.Response, error)
@@ -70,6 +71,7 @@ func APICallBuilder(cli restclient.UnstructuredClientInterface, info *getter.Inf
 				},
 				IdentifierFields:    identifierFields,
 				RequestFieldMapping: descr.RequestFieldMapping,
+				Headers:             descr.Headers,
 			}
 
 			switch action {
@@ -106,6 +108,13 @@ func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSp
 
 	// 1. Apply fields from the Configuration CR.
 	applyConfigSpec(reqConfiguration, configSpec, callInfo.Action.String())
+
+	// 1b. Inject static per-verb headers (explicit RD config wins over any config-derived header).
+	for _, h := range callInfo.Headers {
+		if h.Name != "" {
+			reqConfiguration.Headers[h.Name] = h.Value
+		}
+	}
 
 	// 2. Apply explicit request field mappings.
 	applyRequestFieldMapping(callInfo, mg, reqConfiguration, mapBody)

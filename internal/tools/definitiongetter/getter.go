@@ -139,6 +139,14 @@ type VerbsDescription struct {
 	// Pagination defines the pagination strategy for 'findby' actions. To be set only for 'findby' actions.
 	// If not set, no pagination will be used.
 	Pagination *Pagination `json:"pagination,omitempty"`
+	// Headers are static HTTP headers injected on every request for this verb.
+	Headers []HeaderItem `json:"headers,omitempty"`
+}
+
+// HeaderItem is a single static HTTP header injected on every request for a verb.
+type HeaderItem struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 type Resource struct {
