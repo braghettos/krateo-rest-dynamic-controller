@@ -150,6 +150,16 @@ func (u *UnstructuredClient) Call(ctx context.Context, cli *http.Client, path st
 	recordOutboundCall(ctx, httpMethod, path, resp.StatusCode, start)
 	defer resp.Body.Close()
 
+	// If this verb declares the returned status code as meaning "not found", remap it to a not-found
+	// result (StatusError 404) so the existence logic treats the external resource as absent, even when
+	// the API signals absence with a non-standard code (e.g. 410 Gone or a 204).
+	if opts != nil && HasValidStatusCode(resp.StatusCode, opts.NotFoundCodes...) {
+		return Response{}, &StatusError{
+			StatusCode: http.StatusNotFound,
+			Inner:      fmt.Errorf("status %d remapped to not-found by notFoundCodes", resp.StatusCode),
+		}
+	}
+
 	// If this verb tolerates the returned status code, short-circuit to a successful empty response
 	// (e.g. an API that returns 404 for an optional sub-resource that is simply empty), skipping status
 	// validation and body parsing. The caller's nil-body handling then treats the resource as up-to-date.

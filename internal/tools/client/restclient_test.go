@@ -1264,3 +1264,35 @@ func TestCall_TolerateCodes(t *testing.T) {
 		require.Error(t, err, "an untolerated 404 must error")
 	})
 }
+
+func TestCall_NotFoundCodes(t *testing.T) {
+	handler410 := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGone) // 410
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "gone"})
+	}
+
+	t.Run("410 remapped to not-found via notFoundCodes", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(handler410))
+		defer srv.Close()
+		client := createTestClient(t)
+		client.Server = srv.URL
+
+		_, err := client.Call(context.Background(), srv.Client(), "/api/test",
+			&RequestConfiguration{Method: "GET", NotFoundCodes: []int{410}})
+		require.Error(t, err)
+		assert.True(t, IsNotFoundError(err), "a notFoundCode must be remapped to a not-found result")
+	})
+
+	t.Run("410 without notFoundCodes -> generic invalid-status error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(handler410))
+		defer srv.Close()
+		client := createTestClient(t)
+		client.Server = srv.URL
+
+		_, err := client.Call(context.Background(), srv.Client(), "/api/test",
+			&RequestConfiguration{Method: "GET"})
+		require.Error(t, err)
+		assert.False(t, IsNotFoundError(err), "without notFoundCodes a 410 is not a not-found")
+	})
+}

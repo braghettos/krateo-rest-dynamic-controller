@@ -108,6 +108,8 @@ type RequestConfiguration struct {
 	SuccessCodes []int
 	// TolerateCodes are HTTP status codes to treat as a successful empty response instead of an error.
 	TolerateCodes []int
+	// NotFoundCodes are HTTP status codes remapped to a not-found result (StatusError 404).
+	NotFoundCodes []int
 }
 
 // isInResource is a method used during a "FindBy" operation.
