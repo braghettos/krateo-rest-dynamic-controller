@@ -149,6 +149,8 @@ type VerbsDescription struct {
 	Headers []HeaderItem `json:"headers,omitempty"`
 	// TolerateCodes are HTTP status codes treated as a successful empty response for this verb.
 	TolerateCodes []int `json:"tolerateCodes,omitempty"`
+	// NotFoundCodes are status codes remapped to a not-found result for this verb.
+	NotFoundCodes []int `json:"notFoundCodes,omitempty"`
 }
 
 // HeaderItem is a single static HTTP header injected on every request for a verb.

@@ -36,6 +36,7 @@ type CallInfo struct {
 	SuccessCodes        []int               // extra status codes accepted as success for this verb (merged with OAS 2xx)
 	Headers             []getter.HeaderItem // static per-verb headers to inject on the request
 	TolerateCodes       []int               // status codes treated as a successful empty response for this verb
+	NotFoundCodes       []int               // status codes remapped to a not-found result for this verb
 }
 
 type APIFuncDef func(ctx context.Context, cli *http.Client, path string, conf *restclient.RequestConfiguration) (restclient.Response, error)
@@ -76,6 +77,7 @@ func APICallBuilder(cli restclient.UnstructuredClientInterface, info *getter.Inf
 				SuccessCodes:        descr.SuccessCodes,
 				Headers:             descr.Headers,
 				TolerateCodes:       descr.TolerateCodes,
+				NotFoundCodes:       descr.NotFoundCodes,
 			}
 
 			switch action {
@@ -110,6 +112,7 @@ func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSp
 	reqConfiguration.Method = callInfo.Method
 	reqConfiguration.SuccessCodes = callInfo.SuccessCodes
 	reqConfiguration.TolerateCodes = callInfo.TolerateCodes
+	reqConfiguration.NotFoundCodes = callInfo.NotFoundCodes
 	mapBody := make(map[string]interface{})
 
 	// 1. Apply fields from the Configuration CR.
