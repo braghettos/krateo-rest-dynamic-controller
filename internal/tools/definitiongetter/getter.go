@@ -81,6 +81,39 @@ type RequestFieldMappingItem struct {
 	InCustomResource string `json:"inCustomResource"`
 }
 
+// FieldMappingItem is the runtime mirror of the RestDefinition FieldMappingItem (unified request/response
+// mapping). Exactly one API-side anchor is set: inPath/inQuery/inBody select a request parameter,
+// inResponse selects a response body field to be normalized into the CR-domain shape.
+type FieldMappingItem struct {
+	InPath           string        `json:"inPath,omitempty"`
+	InQuery          string        `json:"inQuery,omitempty"`
+	InBody           string        `json:"inBody,omitempty"`
+	InResponse       string        `json:"inResponse,omitempty"`
+	InCustomResource string        `json:"inCustomResource,omitempty"`
+	ValueMapping     *ValueMapping `json:"valueMapping,omitempty"`
+}
+
+// ValueMapping is the runtime mirror of a value transform. Tier-1 'alias' is applied by the fieldmapping
+// package; Tier-2 'jq' is carried here but only executed once the jq engine lands.
+type ValueMapping struct {
+	Type    string       `json:"type"`
+	Aliases []ValueAlias `json:"aliases,omitempty"`
+	JQ      *JQProgram   `json:"jq,omitempty"`
+}
+
+// ValueAlias is a single bidirectional CR<->API value pair.
+type ValueAlias struct {
+	CustomResourceValue string `json:"customResourceValue"`
+	APIValue            string `json:"apiValue"`
+}
+
+// JQProgram mirrors a gojq program supplied inline or as a module reference.
+type JQProgram struct {
+	Inline     string `json:"inline,omitempty"`
+	Ref        string `json:"ref,omitempty"`
+	Entrypoint string `json:"entrypoint,omitempty"`
+}
+
 type VerbsDescription struct {
 	// Name of the action to perform when this api is called
 	Action string `json:"action"`
@@ -89,8 +122,14 @@ type VerbsDescription struct {
 	// Path: the path to the api
 	Path string `json:"path"`
 	// RequestFieldMapping provides explicit mapping from API parameters (path, query, or body)
-	// to fields in the Custom Resource.
+	// to fields in the Custom Resource. Deprecated: mirrored for backward compatibility; prefer FieldMapping.
 	RequestFieldMapping []RequestFieldMappingItem `json:"requestFieldMapping,omitempty"`
+	// FieldMapping is the unified request/response field mapping (see FieldMappingItem). Response-direction
+	// entries (inResponse) are applied to the observed body before status population and drift comparison.
+	FieldMapping []FieldMappingItem `json:"fieldMapping,omitempty"`
+	// RequestTransform / ResponseTransform are whole-document jq programs (executed once the jq engine lands).
+	RequestTransform  *JQProgram `json:"requestTransform,omitempty"`
+	ResponseTransform *JQProgram `json:"responseTransform,omitempty"`
 	// IdentifiersMatchPolicy defines how to match identifiers for the 'findby' action. To be set only for 'findby' actions.
 	// If not set, defaults to 'OR'.
 	// Possible values are 'AND' or 'OR'.

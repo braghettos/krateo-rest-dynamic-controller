@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/krateoplatformops/plumbing/kubeutil/event"
 	customcondition "github.com/krateoplatformops/rest-dynamic-controller/internal/controllers/condition"
 	restclient "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client"
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client/apiaction"
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client/builder"
 	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
-	"github.com/krateoplatformops/plumbing/kubeutil/event"
+	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/fieldmapping"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
@@ -273,6 +274,12 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		log.Error(fmt.Errorf("body is not an object"), "Performing REST call")
 		return controller.ExternalObservation{}, fmt.Errorf("body is not an object")
 	}
+	// Normalize the observed body into the CR-domain shape (response fieldMapping) before it feeds both
+	// status population and drift comparison, so those keep working unchanged.
+	if err := fieldmapping.NormalizeResponseBody(clientInfo.Resource.VerbsDescription, []string{"get", "findby"}, b); err != nil {
+		log.Error(err, "Normalizing response body (fieldMapping)")
+		return controller.ExternalObservation{}, err
+	}
 	if b != nil {
 		err = populateStatusFields(clientInfo, mg, b)
 		if err != nil {
@@ -384,6 +391,11 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 			return fmt.Errorf("body is not an object")
 		}
 
+		if err := fieldmapping.NormalizeResponseBody(clientInfo.Resource.VerbsDescription, []string{"create"}, b); err != nil {
+			log.Error(err, "Normalizing response body (fieldMapping)")
+			return err
+		}
+
 		err = populateStatusFields(clientInfo, mg, b)
 		if err != nil {
 			log.Error(err, "Populating status fields (identifiers and additionalStatusFields)")
@@ -480,6 +492,11 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 		if !ok {
 			log.Error(fmt.Errorf("body is not an object"), "Performing REST call")
 			return fmt.Errorf("body is not an object")
+		}
+
+		if err := fieldmapping.NormalizeResponseBody(clientInfo.Resource.VerbsDescription, []string{"update"}, b); err != nil {
+			log.Error(err, "Normalizing response body (fieldMapping)")
+			return err
 		}
 
 		err = populateStatusFields(clientInfo, mg, b)
