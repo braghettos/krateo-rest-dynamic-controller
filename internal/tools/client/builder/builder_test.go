@@ -1162,3 +1162,22 @@ func TestBuildCallConfig_SuccessCodesPropagated(t *testing.T) {
 		assert.Equal(t, []int{201, 202}, rc.SuccessCodes, "per-verb successCodes must reach the request configuration")
 	}
 }
+
+func TestBuildCallConfig_HeadersInjected(t *testing.T) {
+	ci := &CallInfo{
+		Path:      "/test/{id}",
+		Method:    "POST",
+		ReqParams: &RequestedParams{Parameters: text.NewStringSet("id"), Query: text.NewStringSet(), Body: text.NewStringSet()},
+		Headers: []getter.HeaderItem{
+			{Name: "Accept", Value: "application/vnd.github.v3.repository+json"},
+			{Name: "Content-Type", Value: "application/json"},
+		},
+	}
+	mg := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{}, "status": map[string]interface{}{}}}
+
+	rc := BuildCallConfig(ci, mg, nil)
+	if assert.NotNil(t, rc) {
+		assert.Equal(t, "application/vnd.github.v3.repository+json", rc.Headers["Accept"])
+		assert.Equal(t, "application/json", rc.Headers["Content-Type"])
+	}
+}

@@ -145,6 +145,14 @@ type VerbsDescription struct {
 	// SuccessCodes lists additional HTTP status codes treated as success for this verb, merged with the
 	// OAS-declared 2xx codes.
 	SuccessCodes []int `json:"successCodes,omitempty"`
+	// Headers are static HTTP headers injected on every request for this verb.
+	Headers []HeaderItem `json:"headers,omitempty"`
+}
+
+// HeaderItem is a single static HTTP header injected on every request for a verb.
+type HeaderItem struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 type Resource struct {
