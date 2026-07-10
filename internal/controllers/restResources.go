@@ -276,7 +276,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 	}
 	// Normalize the observed body into the CR-domain shape (response fieldMapping) before it feeds both
 	// status population and drift comparison, so those keep working unchanged.
-	if err := fieldmapping.NormalizeResponseBody(clientInfo.Resource.VerbsDescription, []string{"get", "findby"}, b); err != nil {
+	if err := fieldmapping.NormalizeResponseBody(ctx, clientInfo.Resource.VerbsDescription, []string{"get", "findby"}, b); err != nil {
 		log.Error(err, "Normalizing response body (fieldMapping)")
 		return controller.ExternalObservation{}, err
 	}
@@ -391,7 +391,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 			return fmt.Errorf("body is not an object")
 		}
 
-		if err := fieldmapping.NormalizeResponseBody(clientInfo.Resource.VerbsDescription, []string{"create"}, b); err != nil {
+		if err := fieldmapping.NormalizeResponseBody(ctx, clientInfo.Resource.VerbsDescription, []string{"create"}, b); err != nil {
 			log.Error(err, "Normalizing response body (fieldMapping)")
 			return err
 		}
@@ -494,7 +494,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 			return fmt.Errorf("body is not an object")
 		}
 
-		if err := fieldmapping.NormalizeResponseBody(clientInfo.Resource.VerbsDescription, []string{"update"}, b); err != nil {
+		if err := fieldmapping.NormalizeResponseBody(ctx, clientInfo.Resource.VerbsDescription, []string{"update"}, b); err != nil {
 			log.Error(err, "Normalizing response body (fieldMapping)")
 			return err
 		}
