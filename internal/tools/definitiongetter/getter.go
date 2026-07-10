@@ -91,6 +91,9 @@ type FieldMappingItem struct {
 	InResponse       string        `json:"inResponse,omitempty"`
 	InCustomResource string        `json:"inCustomResource,omitempty"`
 	ValueMapping     *ValueMapping `json:"valueMapping,omitempty"`
+	// DefaultIfAbsent (response entries only) is the JSON value injected at the CR-domain destination when
+	// the API omits the inResponse source field entirely.
+	DefaultIfAbsent json.RawMessage `json:"defaultIfAbsent,omitempty"`
 }
 
 // ValueMapping is the runtime mirror of a value transform. Tier-1 'alias' is applied by the fieldmapping

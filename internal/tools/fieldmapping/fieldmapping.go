@@ -8,6 +8,7 @@ package fieldmapping
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -39,7 +40,9 @@ const (
 // by ctx. It is a no-op when no matching response transforms are declared, so unmapped resources are
 // unaffected.
 func NormalizeResponseBody(ctx context.Context, verbs []getter.VerbsDescription, actions []string, body map[string]interface{}) error {
-	if len(body) == 0 {
+	// A nil map cannot be written to (SetNestedField). An empty but non-nil body is still processed, because
+	// defaultIfAbsent may need to inject a field into it.
+	if body == nil {
 		return nil
 	}
 	// 1) Whole-document responseTransform first, so per-entry mappings see a normalized body.
@@ -163,8 +166,24 @@ func resolveResponseEntry(ctx context.Context, entry getter.FieldMappingItem, bo
 		return resolvedEntry{}, false, nil
 	}
 	val, found, err := unstructured.NestedFieldNoCopy(body, srcPath...)
-	if err != nil || !found {
+	if err != nil {
 		return resolvedEntry{}, false, nil
+	}
+	if !found {
+		// Source absent: inject defaultIfAbsent if declared, otherwise skip. No value transform or source
+		// lift applies (there is nothing to read or remove) — src == dst so the write phase leaves it be.
+		if len(entry.DefaultIfAbsent) == 0 {
+			return resolvedEntry{}, false, nil
+		}
+		def, derr := decodeDefault(entry.DefaultIfAbsent)
+		if derr != nil {
+			return resolvedEntry{}, false, fmt.Errorf("decoding defaultIfAbsent for response field %q: %w", entry.InResponse, derr)
+		}
+		dstPath, perr := bodyRelativePath(entry.InCustomResource)
+		if perr != nil || len(dstPath) == 0 {
+			return resolvedEntry{}, false, nil
+		}
+		return resolvedEntry{src: dstPath, dst: dstPath, val: def}, true, nil
 	}
 
 	if entry.ValueMapping != nil {
@@ -232,6 +251,15 @@ func bodyRelativePath(inCustomResource string) ([]string, error) {
 		trimmed = strings.TrimPrefix(trimmed, "status.")
 	}
 	return pathparsing.ParsePath(trimmed)
+}
+
+// decodeDefault unmarshals a defaultIfAbsent JSON value into a JSON-canonical Go value.
+func decodeDefault(raw json.RawMessage) (interface{}, error) {
+	var v interface{}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, err
+	}
+	return v, nil
 }
 
 func equalPath(a, b []string) bool {

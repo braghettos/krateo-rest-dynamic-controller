@@ -2,6 +2,7 @@ package fieldmapping
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
@@ -126,4 +127,35 @@ func TestNormalizeResponseBody_TwoPhaseLiftOrdering(t *testing.T) {
 
 	assert.Equal(t, map[string]interface{}{"b": "deep"}, body["whole"], "ancestor lifted as a whole")
 	assert.Equal(t, "deep", body["b"], "descendant source survived the sibling lift (two-phase)")
+}
+
+func TestNormalizeResponseBody_DefaultIfAbsent(t *testing.T) {
+	// The API omits allPipelines when authorized:false; inject the default so the observed body carries it
+	// and the drift compare against a spec that sets it converges (Azure DevOps case).
+	verbs := getVerb(getter.FieldMappingItem{
+		InResponse:       "allPipelines",
+		InCustomResource: "spec.allPipelines",
+		DefaultIfAbsent:  json.RawMessage(`{"authorized":false}`),
+	})
+
+	// Absent -> injected.
+	body := map[string]interface{}{"other": "x"}
+	require.NoError(t, NormalizeResponseBody(context.Background(), verbs, []string{"get"}, body))
+	assert.Equal(t, map[string]interface{}{"authorized": false}, body["allPipelines"])
+
+	// Present -> default ignored, existing value kept (relocated in place: src==dst here).
+	body2 := map[string]interface{}{"allPipelines": map[string]interface{}{"authorized": true}}
+	require.NoError(t, NormalizeResponseBody(context.Background(), verbs, []string{"get"}, body2))
+	assert.Equal(t, map[string]interface{}{"authorized": true}, body2["allPipelines"], "present value is not overwritten by the default")
+}
+
+func TestNormalizeResponseBody_DefaultIfAbsent_Scalar(t *testing.T) {
+	verbs := getVerb(getter.FieldMappingItem{
+		InResponse:       "count",
+		InCustomResource: "status.count",
+		DefaultIfAbsent:  json.RawMessage(`0`),
+	})
+	body := map[string]interface{}{}
+	require.NoError(t, NormalizeResponseBody(context.Background(), verbs, []string{"get"}, body))
+	assert.Equal(t, float64(0), body["count"])
 }
