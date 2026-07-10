@@ -35,6 +35,7 @@ type CallInfo struct {
 	Action              apiaction.APIAction
 	SuccessCodes        []int               // extra status codes accepted as success for this verb (merged with OAS 2xx)
 	Headers             []getter.HeaderItem // static per-verb headers to inject on the request
+	Queries             []getter.QueryParam // static per-verb query params to inject on the request
 	TolerateCodes       []int               // status codes treated as a successful empty response for this verb
 	NotFoundCodes       []int               // status codes remapped to a not-found result for this verb
 }
@@ -76,6 +77,7 @@ func APICallBuilder(cli restclient.UnstructuredClientInterface, info *getter.Inf
 				RequestFieldMapping: descr.RequestFieldMapping,
 				SuccessCodes:        descr.SuccessCodes,
 				Headers:             descr.Headers,
+				Queries:             descr.Queries,
 				TolerateCodes:       descr.TolerateCodes,
 				NotFoundCodes:       descr.NotFoundCodes,
 			}
@@ -122,6 +124,13 @@ func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSp
 	for _, h := range callInfo.Headers {
 		if h.Name != "" {
 			reqConfiguration.Headers[h.Name] = h.Value
+		}
+	}
+
+	// 1c. Inject static per-verb query parameters (set before spec/status processing so they win).
+	for _, q := range callInfo.Queries {
+		if q.Name != "" {
+			reqConfiguration.Query[q.Name] = q.Value
 		}
 	}
 

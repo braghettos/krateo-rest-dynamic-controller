@@ -1181,3 +1181,18 @@ func TestBuildCallConfig_HeadersInjected(t *testing.T) {
 		assert.Equal(t, "application/json", rc.Headers["Content-Type"])
 	}
 }
+
+func TestBuildCallConfig_QueriesInjected(t *testing.T) {
+	ci := &CallInfo{
+		Path:      "/test/{id}",
+		Method:    "PUT",
+		ReqParams: &RequestedParams{Parameters: text.NewStringSet("id"), Query: text.NewStringSet(), Body: text.NewStringSet()},
+		Queries:   []getter.QueryParam{{Name: "api-version", Value: "7.2-preview.7"}},
+	}
+	mg := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{}, "status": map[string]interface{}{}}}
+
+	rc := BuildCallConfig(ci, mg, nil)
+	if assert.NotNil(t, rc) {
+		assert.Equal(t, "7.2-preview.7", rc.Query["api-version"], "per-verb static query must reach the request configuration")
+	}
+}

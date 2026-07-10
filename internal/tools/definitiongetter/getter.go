@@ -147,6 +147,8 @@ type VerbsDescription struct {
 	SuccessCodes []int `json:"successCodes,omitempty"`
 	// Headers are static HTTP headers injected on every request for this verb.
 	Headers []HeaderItem `json:"headers,omitempty"`
+	// Queries are static query parameters injected on every request for this verb.
+	Queries []QueryParam `json:"queries,omitempty"`
 	// TolerateCodes are HTTP status codes treated as a successful empty response for this verb.
 	TolerateCodes []int `json:"tolerateCodes,omitempty"`
 	// NotFoundCodes are status codes remapped to a not-found result for this verb.
@@ -155,6 +157,12 @@ type VerbsDescription struct {
 
 // HeaderItem is a single static HTTP header injected on every request for a verb.
 type HeaderItem struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// QueryParam is a single static query parameter injected on every request for a verb.
+type QueryParam struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
 }
