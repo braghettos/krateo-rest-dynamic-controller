@@ -150,6 +150,13 @@ func (u *UnstructuredClient) Call(ctx context.Context, cli *http.Client, path st
 	recordOutboundCall(ctx, httpMethod, path, resp.StatusCode, start)
 	defer resp.Body.Close()
 
+	// If this verb tolerates the returned status code, short-circuit to a successful empty response
+	// (e.g. an API that returns 404 for an optional sub-resource that is simply empty), skipping status
+	// validation and body parsing. The caller's nil-body handling then treats the resource as up-to-date.
+	if opts != nil && HasValidStatusCode(resp.StatusCode, opts.TolerateCodes...) {
+		return Response{ResponseBody: nil, statusCode: resp.StatusCode}, nil
+	}
+
 	getDoc, ok := pathItem.GetOperations().Get(strings.ToLower(httpMethod))
 	if !ok {
 		return Response{}, fmt.Errorf("operation not found: %s", httpMethod)

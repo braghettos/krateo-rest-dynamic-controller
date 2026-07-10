@@ -147,6 +147,8 @@ type VerbsDescription struct {
 	SuccessCodes []int `json:"successCodes,omitempty"`
 	// Headers are static HTTP headers injected on every request for this verb.
 	Headers []HeaderItem `json:"headers,omitempty"`
+	// TolerateCodes are HTTP status codes treated as a successful empty response for this verb.
+	TolerateCodes []int `json:"tolerateCodes,omitempty"`
 }
 
 // HeaderItem is a single static HTTP header injected on every request for a verb.

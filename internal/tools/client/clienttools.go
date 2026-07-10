@@ -106,6 +106,8 @@ type RequestConfiguration struct {
 	// SuccessCodes are additional HTTP status codes to accept as success for this call, merged with the
 	// OAS-derived 2xx codes during response validation.
 	SuccessCodes []int
+	// TolerateCodes are HTTP status codes to treat as a successful empty response instead of an error.
+	TolerateCodes []int
 }
 
 // isInResource is a method used during a "FindBy" operation.
