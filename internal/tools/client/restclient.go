@@ -158,6 +158,11 @@ func (u *UnstructuredClient) Call(ctx context.Context, cli *http.Client, path st
 	if err != nil {
 		return Response{}, err
 	}
+	// Merge any per-verb successCodes declared on the RestDefinition, so an API returning a non-standard
+	// success code the OAS does not document is accepted rather than rejected as an invalid status.
+	if opts != nil {
+		validStatusCodes = append(validStatusCodes, opts.SuccessCodes...)
+	}
 
 	if !HasValidStatusCode(resp.StatusCode, validStatusCodes...) {
 		return Response{}, &StatusError{
@@ -430,6 +435,10 @@ func (u *UnstructuredClient) CallForPagination(ctx context.Context, cli *http.Cl
 	validStatusCodes, err := getValidResponseCode(getDoc.Responses.Codes)
 	if err != nil {
 		return Response{}, nil, err
+	}
+	// Merge any per-verb successCodes declared on the RestDefinition (see Call for rationale).
+	if opts != nil {
+		validStatusCodes = append(validStatusCodes, opts.SuccessCodes...)
 	}
 
 	if !HasValidStatusCode(resp.StatusCode, validStatusCodes...) {

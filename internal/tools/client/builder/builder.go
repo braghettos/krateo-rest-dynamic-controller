@@ -33,6 +33,7 @@ type CallInfo struct {
 	RequestFieldMapping []getter.RequestFieldMappingItem // RequestFieldMapping is specific for the call (action)
 	Method              string
 	Action              apiaction.APIAction
+	SuccessCodes        []int // extra status codes accepted as success for this verb (merged with OAS 2xx)
 }
 
 type APIFuncDef func(ctx context.Context, cli *http.Client, path string, conf *restclient.RequestConfiguration) (restclient.Response, error)
@@ -70,6 +71,7 @@ func APICallBuilder(cli restclient.UnstructuredClientInterface, info *getter.Inf
 				},
 				IdentifierFields:    identifierFields,
 				RequestFieldMapping: descr.RequestFieldMapping,
+				SuccessCodes:        descr.SuccessCodes,
 			}
 
 			switch action {
@@ -102,6 +104,7 @@ func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSp
 	reqConfiguration.Headers = make(map[string]string)
 	reqConfiguration.Cookies = make(map[string]string)
 	reqConfiguration.Method = callInfo.Method
+	reqConfiguration.SuccessCodes = callInfo.SuccessCodes
 	mapBody := make(map[string]interface{})
 
 	// 1. Apply fields from the Configuration CR.
