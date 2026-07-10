@@ -103,6 +103,9 @@ type RequestConfiguration struct {
 	Cookies    map[string]string
 	Body       any
 	Method     string
+	// SuccessCodes are additional HTTP status codes to accept as success for this call, merged with the
+	// OAS-derived 2xx codes during response validation.
+	SuccessCodes []int
 }
 
 // isInResource is a method used during a "FindBy" operation.

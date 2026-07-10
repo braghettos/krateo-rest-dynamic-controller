@@ -1147,3 +1147,18 @@ func TestApplyRequestFieldMapping(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildCallConfig_SuccessCodesPropagated(t *testing.T) {
+	ci := &CallInfo{
+		Path:         "/test/{id}",
+		Method:       "POST",
+		ReqParams:    &RequestedParams{Parameters: text.NewStringSet("id"), Query: text.NewStringSet(), Body: text.NewStringSet()},
+		SuccessCodes: []int{201, 202},
+	}
+	mg := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{}, "status": map[string]interface{}{}}}
+
+	rc := BuildCallConfig(ci, mg, nil)
+	if assert.NotNil(t, rc) {
+		assert.Equal(t, []int{201, 202}, rc.SuccessCodes, "per-verb successCodes must reach the request configuration")
+	}
+}

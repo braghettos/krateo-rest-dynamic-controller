@@ -126,6 +126,33 @@ func TestCallWithRecorder(t *testing.T) {
 			expectedError: "unexpected status: 400: invalid status code: 400",
 		},
 		{
+			name: "non-standard success code rejected without successCodes",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(250)
+				json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+			},
+			path: "/api/test",
+			opts: &RequestConfiguration{
+				Method: "GET",
+			},
+			expectedError: "invalid status code: 250",
+		},
+		{
+			name: "non-standard success code accepted via successCodes",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(250)
+				json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+			},
+			path: "/api/test",
+			opts: &RequestConfiguration{
+				Method:       "GET",
+				SuccessCodes: []int{250},
+			},
+			expected: map[string]interface{}{"ok": true},
+		},
+		{
 			name: "successful GET with basic auth",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				username, password, ok := r.BasicAuth()

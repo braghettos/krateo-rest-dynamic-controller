@@ -139,6 +139,9 @@ type VerbsDescription struct {
 	// Pagination defines the pagination strategy for 'findby' actions. To be set only for 'findby' actions.
 	// If not set, no pagination will be used.
 	Pagination *Pagination `json:"pagination,omitempty"`
+	// SuccessCodes lists additional HTTP status codes treated as success for this verb, merged with the
+	// OAS-declared 2xx codes.
+	SuccessCodes []int `json:"successCodes,omitempty"`
 }
 
 type Resource struct {
