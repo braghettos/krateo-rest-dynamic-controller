@@ -1,0 +1,110 @@
+package async
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// fastAfter replaces the poll-loop delay so tests don't actually sleep.
+func fastAfter(t *testing.T) {
+	t.Helper()
+	orig := after
+	after = func(time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}
+	t.Cleanup(func() { after = orig })
+}
+
+func TestExtractOperationHandle(t *testing.T) {
+	t.Run("body string handle", func(t *testing.T) {
+		body := map[string]interface{}{"id": "op-123", "status": "queued"}
+		h, err := ExtractOperationHandle(context.Background(), body, getter.OperationRef{In: "body", Path: "id"})
+		require.NoError(t, err)
+		assert.Equal(t, "op-123", h)
+	})
+
+	t.Run("body numeric handle rendered without exponent", func(t *testing.T) {
+		body := map[string]interface{}{"id": float64(2147483648)}
+		h, err := ExtractOperationHandle(context.Background(), body, getter.OperationRef{In: "body", Path: "id"})
+		require.NoError(t, err)
+		assert.Equal(t, "2147483648", h)
+	})
+
+	t.Run("jq derives id from a URL", func(t *testing.T) {
+		body := map[string]interface{}{"url": "https://dev.azure.com/org/_apis/operations/abc-42?api-version=7.1"}
+		ref := getter.OperationRef{In: "body", Path: "url", JQ: &getter.JQProgram{Inline: `capture("operations/(?<id>[^?]+)").id`}}
+		h, err := ExtractOperationHandle(context.Background(), body, ref)
+		require.NoError(t, err)
+		assert.Equal(t, "abc-42", h)
+	})
+
+	t.Run("missing handle errors", func(t *testing.T) {
+		_, err := ExtractOperationHandle(context.Background(), map[string]interface{}{}, getter.OperationRef{In: "body", Path: "id"})
+		require.Error(t, err)
+	})
+
+	t.Run("header not yet supported", func(t *testing.T) {
+		_, err := ExtractOperationHandle(context.Background(), map[string]interface{}{}, getter.OperationRef{In: "header", Path: "Operation-Location"})
+		assert.ErrorContains(t, err, "not supported")
+	})
+}
+
+func TestPollUntilTerminal(t *testing.T) {
+	fastAfter(t)
+	cfg := getter.PollConfig{SuccessValues: []string{"succeeded"}, FailureValues: []string{"failed", "cancelled"}, MaxAttempts: 5}
+
+	t.Run("reaches success after a few polls", func(t *testing.T) {
+		seq := []string{"queued", "inProgress", "succeeded"}
+		i := 0
+		err := PollUntilTerminal(context.Background(), cfg, "op-1", func(context.Context, string) (string, error) {
+			s := seq[i]
+			i++
+			return s, nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 3, i, "polled until the terminal success value")
+	})
+
+	t.Run("terminal failure is an error", func(t *testing.T) {
+		err := PollUntilTerminal(context.Background(), cfg, "op-2", func(context.Context, string) (string, error) {
+			return "failed", nil
+		})
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "terminal failure")
+	})
+
+	t.Run("never terminal exhausts attempts", func(t *testing.T) {
+		calls := 0
+		err := PollUntilTerminal(context.Background(), cfg, "op-3", func(context.Context, string) (string, error) {
+			calls++
+			return "inProgress", nil
+		})
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "did not reach a terminal status")
+		assert.Equal(t, 5, calls, "polled exactly MaxAttempts times")
+	})
+
+	t.Run("case-insensitive status match", func(t *testing.T) {
+		err := PollUntilTerminal(context.Background(), cfg, "op-4", func(context.Context, string) (string, error) {
+			return "Succeeded", nil
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("cancelled context stops polling", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := PollUntilTerminal(ctx, cfg, "op-5", func(context.Context, string) (string, error) {
+			return "inProgress", nil
+		})
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "cancelled")
+	})
+}
