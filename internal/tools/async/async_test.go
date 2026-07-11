@@ -119,6 +119,16 @@ func TestPollUntilTerminal_ClampsMaxAttempts(t *testing.T) {
 	assert.Equal(t, maxAttemptsCap, calls, "MaxAttempts is clamped to the cap so a mis-set value cannot pin a worker")
 }
 
+func TestClassifyStatus(t *testing.T) {
+	cfg := getter.PollConfig{SuccessValues: []string{"succeeded", "done"}, FailureValues: []string{"failed", "cancelled"}}
+	assert.Equal(t, OutcomeSucceeded, ClassifyStatus(cfg, "succeeded"))
+	assert.Equal(t, OutcomeSucceeded, ClassifyStatus(cfg, "DONE"), "match is case-insensitive")
+	assert.Equal(t, OutcomeFailed, ClassifyStatus(cfg, "failed"))
+	assert.Equal(t, OutcomeFailed, ClassifyStatus(cfg, "Cancelled"))
+	assert.Equal(t, OutcomePending, ClassifyStatus(cfg, "running"), "neither success nor failure is pending")
+	assert.Equal(t, OutcomePending, ClassifyStatus(cfg, ""))
+}
+
 func TestPollUntilTerminal(t *testing.T) {
 	fastAfter(t)
 	cfg := getter.PollConfig{SuccessValues: []string{"succeeded"}, FailureValues: []string{"failed", "cancelled"}, MaxAttempts: 5}

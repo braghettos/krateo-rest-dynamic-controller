@@ -67,27 +67,9 @@ func driveAsync(ctx context.Context, cli restclient.UnstructuredClientInterface,
 	// The poll re-uses the trigger call's resolved parameters, query, headers and cookies so a poll
 	// endpoint that shares required inputs with the trigger (e.g. a required ?api-version query param, or
 	// an auth header) still validates. The extracted {operationId} path param takes precedence.
-	pollMethod := cfg.Poll.Method
-	if pollMethod == "" {
-		pollMethod = "GET"
-	}
 	pollClient := &http.Client{Timeout: async.RequestTimeout}
 	poll := func(ctx context.Context, id string) (string, error) {
-		params := map[string]string{"operationId": id}
-		if triggerReq != nil {
-			for k, v := range triggerReq.Parameters {
-				if _, exists := params[k]; !exists {
-					params[k] = v
-				}
-			}
-		}
-		pollReq := &restclient.RequestConfiguration{
-			Method:     pollMethod,
-			Parameters: params,
-			Query:      copyStringMap(triggerReqQuery(triggerReq)),
-			Headers:    copyStringMap(triggerReqHeaders(triggerReq)),
-			Cookies:    copyStringMap(triggerReqCookies(triggerReq)),
-		}
+		pollReq := buildPollRequest(cfg.Poll.Method, id, triggerReq)
 		resp, perr := cli.Call(ctx, pollClient, cfg.Poll.Path, pollReq)
 		if perr != nil {
 			return "", perr
@@ -126,8 +108,33 @@ func driveAsync(ctx context.Context, cli restclient.UnstructuredClientInterface,
 	return getResp, nil
 }
 
-// copyStringMap returns a shallow copy of m (nil-safe), so mutating the poll request never mutates the
-// trigger request's shared maps.
+// buildPollRequest builds the RequestConfiguration for a single poll of the operations endpoint. It binds
+// the extracted {operationId} path param and re-uses base's resolved path params, query, headers and cookies
+// (nil-safe) so a poll endpoint sharing a required input with base still validates. base is the trigger
+// request (Model A) or the get request (Model B) — both resolve the same shared params (e.g. {organization},
+// ?api-version). The maps are copied so the poll request never mutates base's shared maps.
+func buildPollRequest(pollMethod, operationID string, base *restclient.RequestConfiguration) *restclient.RequestConfiguration {
+	if pollMethod == "" {
+		pollMethod = "GET"
+	}
+	params := map[string]string{"operationId": operationID}
+	if base != nil {
+		for k, v := range base.Parameters {
+			if _, exists := params[k]; !exists {
+				params[k] = v
+			}
+		}
+	}
+	return &restclient.RequestConfiguration{
+		Method:     pollMethod,
+		Parameters: params,
+		Query:      copyStringMap(reqQuery(base)),
+		Headers:    copyStringMap(reqHeaders(base)),
+		Cookies:    copyStringMap(reqCookies(base)),
+	}
+}
+
+// copyStringMap returns a shallow copy of m (nil-safe).
 func copyStringMap(m map[string]string) map[string]string {
 	out := make(map[string]string, len(m))
 	for k, v := range m {
@@ -136,21 +143,21 @@ func copyStringMap(m map[string]string) map[string]string {
 	return out
 }
 
-func triggerReqQuery(r *restclient.RequestConfiguration) map[string]string {
+func reqQuery(r *restclient.RequestConfiguration) map[string]string {
 	if r == nil {
 		return nil
 	}
 	return r.Query
 }
 
-func triggerReqHeaders(r *restclient.RequestConfiguration) map[string]string {
+func reqHeaders(r *restclient.RequestConfiguration) map[string]string {
 	if r == nil {
 		return nil
 	}
 	return r.Headers
 }
 
-func triggerReqCookies(r *restclient.RequestConfiguration) map[string]string {
+func reqCookies(r *restclient.RequestConfiguration) map[string]string {
 	if r == nil {
 		return nil
 	}

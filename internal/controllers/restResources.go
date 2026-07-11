@@ -137,6 +137,15 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		}
 	}
 
+	// If a requeue-based (Model B) async operation is in flight, poll it once before the normal existence
+	// checks: stay pending until it terminates, then (on success) fall through to observe the real state.
+	if opID, action := asyncOperationInFlight(mg); opID != "" {
+		obs, handled, aerr := h.driveAsyncRequeue(ctx, cli, clientInfo, mg, opID, action, log)
+		if handled {
+			return obs, aerr
+		}
+	}
+
 	var response restclient.Response
 	// Tries to tries to build the `get` action API Call, with the given statusFields and specFields values.
 	// If it is able to validate the `get` action request, returns true
@@ -409,16 +418,27 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 		return err
 	}
 
-	// If create is asynchronous, drive the long-running operation to completion (poll until terminal),
-	// replacing the transient operation-reference response with the resource's real state when postGet is set.
-	// Model A (blocking-poll) drives the operation inline: if the controller restarts mid-poll the create
-	// verb re-runs, so the create trigger must be idempotent (e.g. tolerate a duplicate via successCodes/409
-	// or a server-side upsert). Recovering the in-flight operation handle without re-triggering is Model B.
+	// If create is asynchronous, drive the long-running operation. Two modes:
+	//   - Model A (blocking, default): poll to completion inline here. If the controller restarts mid-poll the
+	//     create verb re-runs, so the trigger must be idempotent (tolerate a duplicate via successCodes/409
+	//     or a server-side upsert).
+	//   - Model B (requeue): record the operation handle and return; the resource stays Pending and each
+	//     subsequent Observe polls the operation once until it terminates — no worker is blocked, and the
+	//     create is not re-triggered on restart.
+	asyncRequeued := false
 	if cfg := asyncConfigForAction(clientInfo.Resource.VerbsDescription, string(apiaction.Create)); cfg != nil {
-		response, err = driveAsync(ctx, cli, clientInfo, mg, cfg, string(apiaction.Create), response, reqConfiguration, log)
-		if err != nil {
-			log.Error(err, "Driving async create operation")
-			return err
+		if asyncRequeueEnabled(cfg) {
+			if err := h.recordAsyncOperation(ctx, mg, cfg, string(apiaction.Create), response, reqConfiguration, log); err != nil {
+				log.Error(err, "Recording async create operation")
+				return err
+			}
+			asyncRequeued = true
+		} else {
+			response, err = driveAsync(ctx, cli, clientInfo, mg, cfg, string(apiaction.Create), response, reqConfiguration, log)
+			if err != nil {
+				log.Error(err, "Driving async create operation")
+				return err
+			}
 		}
 	}
 
@@ -451,8 +471,9 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 	log.Debug("Creating external resource", "kind", mg.GetKind())
 
-	// Set condition for pending responses to indicate async creation operation in progress.
-	if response.IsPending() {
+	// Set condition for pending responses to indicate async creation operation in progress. A Model B
+	// (requeue) operation is always pending on create — its handle was recorded and Observe will poll it.
+	if response.IsPending() || asyncRequeued {
 		log.Debug("External resource is pending", "kind", mg.GetKind())
 		err = unstructuredtools.SetConditions(mg, customcondition.Pending())
 		if err != nil {
@@ -525,13 +546,23 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 		return err
 	}
 
-	// If update is asynchronous, drive the long-running operation to completion (poll until terminal),
-	// replacing the transient operation-reference response with the resource's real state when postGet is set.
+	// If update is asynchronous, drive the long-running operation. Model A (blocking) polls to completion
+	// inline; Model B (requeue) records the operation handle and returns, letting each subsequent Observe
+	// poll it once until terminal (see the create path for the full rationale).
+	asyncRequeued := false
 	if cfg := asyncConfigForAction(clientInfo.Resource.VerbsDescription, string(apiaction.Update)); cfg != nil {
-		response, err = driveAsync(ctx, cli, clientInfo, mg, cfg, string(apiaction.Update), response, reqConfiguration, log)
-		if err != nil {
-			log.Error(err, "Driving async update operation")
-			return err
+		if asyncRequeueEnabled(cfg) {
+			if err := h.recordAsyncOperation(ctx, mg, cfg, string(apiaction.Update), response, reqConfiguration, log); err != nil {
+				log.Error(err, "Recording async update operation")
+				return err
+			}
+			asyncRequeued = true
+		} else {
+			response, err = driveAsync(ctx, cli, clientInfo, mg, cfg, string(apiaction.Update), response, reqConfiguration, log)
+			if err != nil {
+				log.Error(err, "Driving async update operation")
+				return err
+			}
 		}
 	}
 
@@ -564,8 +595,9 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 	log.Debug("Updating external resource", "kind", mg.GetKind())
 
-	// Set condition for pending responses to indicate async update operation in progress.
-	if response.IsPending() {
+	// Set condition for pending responses to indicate async update operation in progress. A Model B
+	// (requeue) operation is always pending on update — its handle was recorded and Observe will poll it.
+	if response.IsPending() || asyncRequeued {
 		log.Debug("External resource update is pending", "kind", mg.GetKind())
 		err = unstructuredtools.SetConditions(mg, customcondition.Pending())
 		if err != nil {
