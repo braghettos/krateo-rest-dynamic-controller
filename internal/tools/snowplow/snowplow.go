@@ -49,6 +49,11 @@ func (c *Client) WithHTTPClient(h *http.Client) *Client { c.httpClient = h; retu
 
 const restActionAPIVersion = "templates.krateo.io/v1"
 
+// maxExtrasBytes bounds the JSON-encoded extras. Extras ride on the /call GET query string, so an
+// unbounded payload (e.g. a very large spec on the create path) could exceed URL/header limits and 414.
+// This surfaces a clear error instead. ~48KiB leaves ample headroom under a typical 60KiB header cap.
+const maxExtrasBytes = 48 * 1024
+
 // Resolve resolves the referenced RESTAction with the given extras (the per-instance
 // request-extras merged over the RESTAction's inline apiRef.extras by snowplow) and returns
 // the keyed `.api` response map from the resolved CR's status.
@@ -70,6 +75,9 @@ func (c *Client) Resolve(ctx context.Context, ref ApiRef, extras map[string]any)
 		b, err := json.Marshal(extras)
 		if err != nil {
 			return nil, fmt.Errorf("encoding extras: %w", err)
+		}
+		if len(b) > maxExtrasBytes {
+			return nil, fmt.Errorf("extras too large (%d bytes > %d): the resource spec is too big to forward inline; have the RESTAction fetch it instead", len(b), maxExtrasBytes)
 		}
 		q.Set("extras", string(b))
 	}

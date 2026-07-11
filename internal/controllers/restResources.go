@@ -420,6 +420,31 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	cli.PrettyJSON = h.prettyJSONDebug
 	cli.SetAuth = clientInfo.SetAuth
 
+	// If create is delegated to a RESTAction, invoke the provisioning sequence instead of the create verb
+	// and mark the resource Creating; convergence is by re-invocation (the RESTAction must be idempotent)
+	// until Observe reports the resource exists — which requires a get/findby observe that can report
+	// non-existence. Without one, the resource is marked Available after a single unverified invocation.
+	if ref := clientInfo.Resource.CreateApiRef; ref != nil {
+		if !hasObserveVerb(clientInfo.Resource.VerbsDescription) {
+			log.Warn("createApiRef is set but the resource has no get/findby verb: create success cannot be verified and the resource will be marked Available after one invocation", "restAction", ref.Namespace+"/"+ref.Name)
+		}
+		if err := h.mutateViaRestAction(ctx, mg, ref, clientInfo.Resource.Identifiers, "create", log); err != nil {
+			log.Error(err, "Creating via RESTAction")
+			h.eventRecorder.Event(mg, event.Warning(reasonCreated, "Create", err))
+			return err
+		}
+		if err := unstructuredtools.SetConditions(mg, condition.Creating()); err != nil {
+			return err
+		}
+		if _, err := tools.UpdateStatus(ctx, mg, tools.UpdateOptions{Pluralizer: h.pluralizer, DynamicClient: h.dynamicClient}); err != nil {
+			log.Error(err, "Updating status")
+			h.eventRecorder.Event(mg, event.Warning(reasonCreated, "Create", err))
+			return err
+		}
+		h.eventRecorder.Event(mg, event.Normal(reasonCreated, "Create", fmt.Sprintf("Invoked create RESTAction for: %s", mg.GetName())))
+		return nil
+	}
+
 	apiCall, callInfo, err := builder.APICallBuilder(cli, clientInfo, apiaction.Create)
 	if err != nil {
 		log.Error(err, "Building API call")
@@ -680,6 +705,33 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	cli.Debug = meta.IsVerbose(mg)
 	cli.PrettyJSON = h.prettyJSONDebug
 	cli.SetAuth = clientInfo.SetAuth
+
+	// If delete is delegated to a RESTAction, invoke the teardown sequence, then VERIFY the resource is
+	// actually gone before releasing the finalizer — a RESTAction returns 200 even if a teardown stage
+	// failed, so a bare success is not proof of deletion. Hold the finalizer (return the error) on a
+	// transport failure or while the resource still exists, so the teardown is retried; release it (return
+	// nil) only once verified gone.
+	if ref := clientInfo.Resource.DeleteApiRef; ref != nil {
+		if err := h.mutateViaRestAction(ctx, mg, ref, clientInfo.Resource.Identifiers, "delete", log); err != nil {
+			log.Error(err, "Deleting via RESTAction")
+			h.eventRecorder.Event(mg, event.Warning(reasonDeleted, "Delete", err))
+			return err
+		}
+		stillExists, verr := h.externalResourceStillExists(ctx, cli, clientInfo, mg, log)
+		if verr != nil {
+			h.eventRecorder.Event(mg, event.Warning(reasonDeleted, "Delete", verr))
+			return verr
+		}
+		if stillExists {
+			err := fmt.Errorf("delete RESTAction %s/%s completed but the external resource is still present; retrying", ref.Namespace, ref.Name)
+			h.eventRecorder.Event(mg, event.Warning(reasonDeleted, "Delete", err))
+			return err
+		}
+		if err := unstructuredtools.SetConditions(mg, condition.Deleting()); err != nil {
+			log.Warn("Setting condition", "error", err)
+		}
+		return nil
+	}
 
 	_, err = unstructuredtools.GetFieldsFromUnstructured(mg, "status")
 	if err == ErrStatusNotFound {

@@ -34,7 +34,7 @@ func (h *handler) observeViaRestAction(ctx context.Context, mg *unstructured.Uns
 		return controller.ExternalObservation{}, true, fmt.Errorf("resource declares observeApiRef %s/%s but no snowplow client is configured (set the snowplow/authn URLs)", ref.Namespace, ref.Name)
 	}
 
-	extras := observeExtras(mg, ref.Extras, identifiers)
+	extras := buildExtras(mg, ref.Extras, identifiers, false)
 	result, err := h.snowplowClient.Resolve(ctx, snowplow.ApiRef{Name: ref.Name, Namespace: ref.Namespace}, extras)
 	if err != nil {
 		log.Error(err, "Resolving observe RESTAction", "restAction", ref.Namespace+"/"+ref.Name)
@@ -59,13 +59,14 @@ func (h *handler) observeViaRestAction(ctx context.Context, mg *unstructured.Uns
 	return controller.ExternalObservation{ResourceExists: true, ResourceUpToDate: true}, true, nil
 }
 
-// observeExtras builds the request extras passed to snowplow: the RESTAction's static extras form the base,
-// and the per-instance context is layered on top and WINS on conflict. The per-instance context is the
-// resource's name/namespace/uid plus the values of its declared IDENTIFIERS (resolved from spec, else
-// status) — deliberately NOT the whole spec, which would put arbitrary, potentially sensitive and unbounded
-// data onto the /call query string. The identifiers are what the RESTAction needs to locate the resource.
-func observeExtras(mg *unstructured.Unstructured, static map[string]interface{}, identifiers []string) map[string]any {
-	out := make(map[string]any, len(static)+len(identifiers)+3)
+// buildExtras builds the request extras passed to snowplow: the RESTAction's static extras form the base,
+// and the per-instance context is layered on top and WINS on conflict. The per-instance context is always
+// the resource's name/namespace/uid plus the values of its declared IDENTIFIERS (resolved from spec, else
+// status). includeSpec additionally forwards the WHOLE spec — needed by the create RESTAction (the desired
+// state), but never for observe/delete (which only need to locate the resource), so those keep the payload
+// small and free of arbitrary spec data.
+func buildExtras(mg *unstructured.Unstructured, static map[string]interface{}, identifiers []string, includeSpec bool) map[string]any {
+	out := make(map[string]any, len(static)+len(identifiers)+4)
 	for k, v := range static {
 		out[k] = v
 	}
@@ -83,6 +84,11 @@ func observeExtras(mg *unstructured.Unstructured, static map[string]interface{},
 		}
 		if v, found, _ := unstructured.NestedFieldNoCopy(mg.Object, append([]string{"status"}, segs...)...); found {
 			out[id] = v
+		}
+	}
+	if includeSpec {
+		if spec, found, _ := unstructured.NestedMap(mg.Object, "spec"); found {
+			out["spec"] = spec
 		}
 	}
 	return out

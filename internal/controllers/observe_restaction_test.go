@@ -8,14 +8,15 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func TestObserveExtras(t *testing.T) {
+func TestBuildExtras_ObserveNoSpec(t *testing.T) {
 	mg := &unstructured.Unstructured{Object: map[string]interface{}{
 		"metadata": map[string]interface{}{"name": "r1", "namespace": "demo", "uid": "u-1"},
 		"spec":     map[string]interface{}{"id": "spec-id", "size": "large"},
 		"status":   map[string]interface{}{"region": "eu"},
 	}}
 
-	extras := observeExtras(mg, map[string]interface{}{"apiVersion": "7.0", "name": "STATIC"}, []string{"id", "region"})
+	// observe/delete path: includeSpec=false
+	extras := buildExtras(mg, map[string]interface{}{"apiVersion": "7.0", "name": "STATIC"}, []string{"id", "region"}, false)
 
 	// per-instance context is layered on top and wins over static
 	assert.Equal(t, "r1", extras["name"], "per-instance name wins over static")
@@ -27,21 +28,34 @@ func TestObserveExtras(t *testing.T) {
 	assert.Equal(t, "spec-id", extras["id"], "identifier resolved from spec")
 	assert.Equal(t, "eu", extras["region"], "identifier resolved from status when absent in spec")
 	_, hasSpec := extras["spec"]
-	assert.False(t, hasSpec, "the whole spec is never forwarded")
+	assert.False(t, hasSpec, "the whole spec is never forwarded on the observe/delete path")
 	_, hasSize := extras["size"]
 	assert.False(t, hasSize, "a non-identifier spec field is not forwarded")
 }
 
-func TestObserveExtras_NilStaticNoIdentifiers(t *testing.T) {
+func TestBuildExtras_CreateIncludesSpec(t *testing.T) {
+	mg := &unstructured.Unstructured{Object: map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "r1", "namespace": "demo"},
+		"spec":     map[string]interface{}{"size": "large", "region": "eu"},
+	}}
+	// create path: includeSpec=true — the desired state must reach the RESTAction
+	extras := buildExtras(mg, nil, nil, true)
+	assert.Equal(t, "r1", extras["name"])
+	spec, ok := extras["spec"].(map[string]interface{})
+	require.True(t, ok, "whole spec forwarded on the create path")
+	assert.Equal(t, "large", spec["size"])
+}
+
+func TestBuildExtras_NilStaticNoIdentifiers(t *testing.T) {
 	mg := &unstructured.Unstructured{Object: map[string]interface{}{
 		"metadata": map[string]interface{}{"name": "r1", "namespace": "demo"},
 		"spec":     map[string]interface{}{"secret": "do-not-send"},
 	}}
-	extras := observeExtras(mg, nil, nil)
+	extras := buildExtras(mg, nil, nil, false)
 	assert.Equal(t, "r1", extras["name"])
 	assert.Equal(t, "demo", extras["namespace"])
 	_, hasSpec := extras["spec"]
-	assert.False(t, hasSpec, "no spec forwarded")
+	assert.False(t, hasSpec, "no spec forwarded on the observe path")
 	_, hasSecret := extras["secret"]
 	assert.False(t, hasSecret)
 }

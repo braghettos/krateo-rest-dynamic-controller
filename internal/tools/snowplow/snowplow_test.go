@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -81,5 +82,13 @@ func TestResolve(t *testing.T) {
 		_, err := c.Resolve(context.Background(), ApiRef{Name: "a", Namespace: "b"}, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "token")
+	})
+
+	t.Run("oversized extras is rejected before any request", func(t *testing.T) {
+		c := New("http://unused", nil)
+		_, err := c.Resolve(context.Background(), ApiRef{Name: "a", Namespace: "b"},
+			map[string]any{"spec": strings.Repeat("x", 64*1024)}) // > maxExtrasBytes
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "too large")
 	})
 }

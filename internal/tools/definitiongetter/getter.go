@@ -218,6 +218,10 @@ type Resource struct {
 	// ObserveApiRef, when set, delegates observe to a Snowplow RESTAction (invoked via snowplow /call)
 	// whose composed .status is projected into this resource's status. Mirrors the oasgen CRD field.
 	ObserveApiRef *ApiRef `json:"observeApiRef,omitempty"`
+	// CreateApiRef / DeleteApiRef, when set, delegate create / delete to a Snowplow RESTAction (an
+	// idempotent multi-call sequence) invoked via snowplow /call. Mirrors the oasgen CRD fields.
+	CreateApiRef *ApiRef `json:"createApiRef,omitempty"`
+	DeleteApiRef *ApiRef `json:"deleteApiRef,omitempty"`
 }
 
 // ApiRef references a Snowplow RESTAction resolved via snowplow's /call endpoint.
