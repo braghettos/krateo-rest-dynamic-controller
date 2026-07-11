@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/auth"
+	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/jqmodule"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -130,7 +131,7 @@ type VerbsDescription struct {
 	// FieldMapping is the unified request/response field mapping (see FieldMappingItem). Response-direction
 	// entries (inResponse) are applied to the observed body before status population and drift comparison.
 	FieldMapping []FieldMappingItem `json:"fieldMapping,omitempty"`
-	// RequestTransform / ResponseTransform are whole-document jq programs (executed once the jq engine lands).
+	// RequestTransform / ResponseTransform are whole-document jq programs applied by the jq engine.
 	RequestTransform  *JQProgram `json:"requestTransform,omitempty"`
 	ResponseTransform *JQProgram `json:"responseTransform,omitempty"`
 	// IdentifiersMatchPolicy defines how to match identifiers for the 'findby' action. To be set only for 'findby' actions.
@@ -278,6 +279,7 @@ func Dynamic(cfg *rest.Config, pluralizer pluralizer.PluralizerInterface) (Gette
 	return &dynamicGetter{
 		pluralizer:    pluralizer,
 		dynamicClient: dyn,
+		jqResolver:    jqmodule.New(dyn, nil),
 	}, nil
 }
 
@@ -286,6 +288,9 @@ var _ Getter = (*dynamicGetter)(nil)
 type dynamicGetter struct {
 	dynamicClient dynamic.Interface
 	pluralizer    pluralizer.PluralizerInterface
+	// jqResolver materializes JQProgram.Ref (configmap:// / http(s):// jq modules) into JQProgram.Inline at
+	// load time, so downstream jq consumers only ever see inline source.
+	jqResolver *jqmodule.Resolver
 }
 
 // Get retrieves the related RestDefinition for the given unstructured object.
@@ -375,10 +380,64 @@ func (g *dynamicGetter) Get(un *unstructured.Unstructured) (*Info, error) {
 				return nil, err
 			}
 
+			if err := g.resolveJQRefs(context.Background(), info, item.GetNamespace()); err != nil {
+				return nil, err
+			}
+
 			return info, nil
 		}
 	}
 	return nil, fmt.Errorf("no definitions found for '%v' in namespace: %s", gvr, un.GetNamespace())
+}
+
+// resolveJQRefs walks every JQProgram carried by the resource's verbs and materializes any module reference
+// (JQProgram.Ref) into JQProgram.Inline, so downstream jq consumers only deal with inline source.
+func (g *dynamicGetter) resolveJQRefs(ctx context.Context, info *Info, ownNamespace string) error {
+	if info == nil {
+		return nil
+	}
+	for i := range info.Resource.VerbsDescription {
+		v := &info.Resource.VerbsDescription[i]
+		for _, p := range []*JQProgram{v.RequestTransform, v.ResponseTransform, v.NotFoundBody} {
+			if err := g.materializeJQ(ctx, p, ownNamespace); err != nil {
+				return err
+			}
+		}
+		for j := range v.FieldMapping {
+			if vm := v.FieldMapping[j].ValueMapping; vm != nil {
+				if err := g.materializeJQ(ctx, vm.JQ, ownNamespace); err != nil {
+					return err
+				}
+			}
+		}
+		if v.Async != nil {
+			if err := g.materializeJQ(ctx, v.Async.OperationRef.JQ, ownNamespace); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// materializeJQ resolves a single JQProgram's module reference into inline source. A module that names an
+// Entrypoint has it appended as the trailing query (module defs + `<entrypoint>`); a module with no
+// entrypoint must itself be a complete jq program. Inline programs and nil are left unchanged.
+func (g *dynamicGetter) materializeJQ(ctx context.Context, p *JQProgram, ownNamespace string) error {
+	if p == nil || p.Ref == "" {
+		return nil
+	}
+	src, err := g.jqResolver.Fetch(ctx, p.Ref, ownNamespace)
+	if err != nil {
+		return fmt.Errorf("resolving jq module: %w", err)
+	}
+	program := string(src)
+	if p.Entrypoint != "" {
+		program = program + "\n" + p.Entrypoint
+	}
+	p.Inline = program
+	p.Ref = ""
+	p.Entrypoint = ""
+	return nil
 }
 
 // processConfigurationRef processes the configuration reference for the given unstructured object.

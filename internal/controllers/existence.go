@@ -27,10 +27,11 @@ func evalNotFoundBody(ctx context.Context, prog *getter.JQProgram, body interfac
 		return false, nil
 	}
 	if prog.Inline == "" {
-		// ref/entrypoint (jq-module loader) is not wired for existence predicates yet; fail loudly rather
+		// A module ref (configmap:// / http(s)://) is materialized into Inline by the definitiongetter at
+		// load time, so a still-present Ref here means resolution was skipped/failed — fail loudly rather
 		// than silently ignoring a declared-but-unhonored predicate.
 		if prog.Ref != "" {
-			return false, fmt.Errorf("notFoundBody.ref is not supported yet (use inline)")
+			return false, fmt.Errorf("notFoundBody jq module %q was not resolved to inline source", prog.Ref)
 		}
 		return false, nil
 	}
