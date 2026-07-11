@@ -22,7 +22,9 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/telemetry"
 
 	restResources "github.com/krateoplatformops/rest-dynamic-controller/internal/controllers"
+	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/authn"
 	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/snowplow"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/workqueue"
@@ -51,6 +53,15 @@ func main() {
 	prettyJSONDebug := flag.Bool("pretty-json-debug",
 		env.Bool("REST_CONTROLLER_PRETTY_JSON_DEBUG", false),
 		"globally enable pretty-print JSON formatting in HTTP debug output (response bodies)")
+	snowplowURL := flag.String("snowplow-url",
+		env.String("URL_SNOWPLOW", ""),
+		"snowplow base URL for resolving observeApiRef RESTActions; empty disables observeApiRef resolution")
+	authnURL := flag.String("authn-url",
+		env.String("URL_AUTHN", ""),
+		"authn base URL for exchanging the projected ServiceAccount token for a service JWT (empty = call snowplow unauthenticated)")
+	saTokenPath := flag.String("serviceaccount-token-path",
+		env.String("REST_CONTROLLER_SERVICEACCOUNT_TOKEN_PATH", authn.DefaultTokenPath),
+		"path to the projected (authn-audience) ServiceAccount token used to authenticate to authn")
 	workers := flag.Int("workers",
 		env.Int("REST_CONTROLLER_WORKERS", 5),
 		"number of workers")
@@ -247,6 +258,20 @@ func main() {
 		SetEventRecorder(event.Recorder)
 	}); ok {
 		h.SetEventRecorder(apiRecorder)
+	}
+
+	// Wire the snowplow client used to resolve observeApiRef RESTActions under the controller's own authn
+	// identity (mirrors composition-dynamic-controller). Enabled only when a snowplow URL is configured; the
+	// authn client provides the Bearer JWT when an authn URL is set.
+	if *snowplowURL != "" {
+		var tokenFunc snowplow.TokenFunc
+		if *authnURL != "" {
+			tokenFunc = authn.New(*authnURL, *saTokenPath).Token
+		}
+		if h, ok := handler.(interface{ SetSnowplowClient(*snowplow.Client) }); ok {
+			h.SetSnowplowClient(snowplow.New(*snowplowURL, tokenFunc))
+			log.Info("observeApiRef resolution enabled", "snowplow", *snowplowURL, "authn", *authnURL)
+		}
 	}
 
 	opts := []builder.FuncOption{
