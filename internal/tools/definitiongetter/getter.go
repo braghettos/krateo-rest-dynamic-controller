@@ -176,6 +176,10 @@ type QueryParam struct {
 
 // AsyncConfig is the runtime mirror of the RestDefinition async/LRO configuration.
 type AsyncConfig struct {
+	// Mode is "blocking" (default, Model A: poll to completion inline) or "requeue" (Model B: fire, record
+	// the handle, and poll once per reconcile until terminal). requeue applies to create/update; delete
+	// always polls inline. See the oasgen CRD field for details.
+	Mode         string       `json:"mode,omitempty"`
 	OperationRef OperationRef `json:"operationRef"`
 	Poll         PollConfig   `json:"poll"`
 	PostGet      bool         `json:"postGet,omitempty"`

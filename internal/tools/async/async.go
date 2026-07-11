@@ -145,6 +145,31 @@ func RenderScalar(v interface{}) string {
 	}
 }
 
+// PollOutcome classifies a single observed operation status against a PollConfig's terminal values.
+type PollOutcome int
+
+const (
+	// OutcomePending means the status matched neither a success nor a failure value — keep polling.
+	OutcomePending PollOutcome = iota
+	// OutcomeSucceeded means the status matched a success value.
+	OutcomeSucceeded
+	// OutcomeFailed means the status matched a failure value.
+	OutcomeFailed
+)
+
+// ClassifyStatus maps a single observed status to a terminal/pending outcome (case-insensitive). It is the
+// per-attempt decision PollUntilTerminal makes internally, exposed for the requeue-based driver (Model B),
+// which polls once per reconcile rather than blocking.
+func ClassifyStatus(cfg getter.PollConfig, status string) PollOutcome {
+	if containsFold(cfg.SuccessValues, status) {
+		return OutcomeSucceeded
+	}
+	if containsFold(cfg.FailureValues, status) {
+		return OutcomeFailed
+	}
+	return OutcomePending
+}
+
 // PollFunc performs a single poll for the given operation and returns the observed status value.
 type PollFunc func(ctx context.Context, operationID string) (status string, err error)
 
@@ -191,10 +216,10 @@ func PollUntilTerminal(ctx context.Context, cfg getter.PollConfig, operationID s
 		if err != nil {
 			return fmt.Errorf("polling operation %q: %w", operationID, err)
 		}
-		if containsFold(cfg.SuccessValues, status) {
+		switch ClassifyStatus(cfg, status) {
+		case OutcomeSucceeded:
 			return nil
-		}
-		if containsFold(cfg.FailureValues, status) {
+		case OutcomeFailed:
 			return fmt.Errorf("operation %q reached terminal failure status %q", operationID, status)
 		}
 
