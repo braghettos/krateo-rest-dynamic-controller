@@ -35,10 +35,10 @@ func TestEvalNotFoundBody(t *testing.T) {
 		assert.False(t, absent)
 	})
 
-	t.Run("ref without inline is not supported yet", func(t *testing.T) {
+	t.Run("unresolved ref (should have been materialized upstream) errors", func(t *testing.T) {
 		_, err := evalNotFoundBody(ctx, &getter.JQProgram{Ref: "configmap://ns/name/key"}, map[string]interface{}{})
 		require.Error(t, err)
-		assert.ErrorContains(t, err, "not supported")
+		assert.ErrorContains(t, err, "not resolved to inline")
 	})
 
 	t.Run("empty list means absent", func(t *testing.T) {
