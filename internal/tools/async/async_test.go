@@ -56,6 +56,41 @@ func TestExtractOperationHandle(t *testing.T) {
 	})
 }
 
+func TestScalarToString(t *testing.T) {
+	// gojq emits native Go ints for whole numbers; a numeric handle must still render (not error).
+	got, err := scalarToString(42, "id")
+	require.NoError(t, err)
+	assert.Equal(t, "42", got)
+
+	got, err = scalarToString(int32(7), "id")
+	require.NoError(t, err)
+	assert.Equal(t, "7", got)
+
+	got, err = scalarToString(int64(9), "id")
+	require.NoError(t, err)
+	assert.Equal(t, "9", got)
+}
+
+func TestRenderScalar(t *testing.T) {
+	assert.Equal(t, "running", RenderScalar("running"))
+	assert.Equal(t, "200", RenderScalar(float64(200)), "whole-number float renders without exponent")
+	assert.Equal(t, "200", RenderScalar(200))
+	assert.Equal(t, "true", RenderScalar(true))
+	assert.Equal(t, "1.5", RenderScalar(1.5))
+}
+
+func TestPollUntilTerminal_ClampsMaxAttempts(t *testing.T) {
+	fastAfter(t)
+	cfg := getter.PollConfig{SuccessValues: []string{"succeeded"}, MaxAttempts: 100000}
+	calls := 0
+	err := PollUntilTerminal(context.Background(), cfg, "op", func(context.Context, string) (string, error) {
+		calls++
+		return "inProgress", nil
+	})
+	require.Error(t, err)
+	assert.Equal(t, maxAttemptsCap, calls, "MaxAttempts is clamped to the cap so a mis-set value cannot pin a worker")
+}
+
 func TestPollUntilTerminal(t *testing.T) {
 	fastAfter(t)
 	cfg := getter.PollConfig{SuccessValues: []string{"succeeded"}, FailureValues: []string{"failed", "cancelled"}, MaxAttempts: 5}
