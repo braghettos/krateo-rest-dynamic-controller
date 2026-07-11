@@ -54,7 +54,9 @@ func TestLiftStepCall(t *testing.T) {
 	}
 	v := LiftStepCall(sc)
 	assert.Equal(t, "DELETE", v.Method)
-	assert.Equal(t, []int{404}, v.NotFoundCodes)
+	// notFoundCodes is merged into tolerateCodes for teardown (already-gone == success, not an error).
+	assert.Contains(t, v.TolerateCodes, 404)
+	assert.Empty(t, v.NotFoundCodes, "notFoundCodes is not carried on a teardown verb (would wedge the delete)")
 	assert.Len(t, v.RequestFieldMapping, 1)
 	assert.Equal(t, "status.orchestration.steps.repo.name", v.RequestFieldMapping[0].InCustomResource)
 }

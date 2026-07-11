@@ -146,6 +146,12 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		}
 	}
 
+	// If the resource has an orchestration create plan in progress, advance it one step (non-blocking):
+	// stay Pending until every step is done, then fall through to a normal observe of the primary resource.
+	if obs, handled, perr := h.drivePlan(ctx, cli, clientInfo, mg, log); handled {
+		return obs, perr
+	}
+
 	var response restclient.Response
 	// Tries to tries to build the `get` action API Call, with the given statusFields and specFields values.
 	// If it is able to validate the `get` action request, returns true
@@ -401,6 +407,19 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	cli.Debug = meta.IsVerbose(mg)
 	cli.PrettyJSON = h.prettyJSONDebug
 	cli.SetAuth = clientInfo.SetAuth
+
+	// If the resource declares an orchestration create plan, Create only seeds the durable cursor and marks
+	// it Pending; the steps themselves run in Observe (drivePlan), one per reconcile, so no worker is
+	// blocked and a restart resumes at the first not-done step.
+	if plan := orchestrationCreatePlan(clientInfo); plan != nil {
+		if err := h.seedOrchestration(ctx, mg, log); err != nil {
+			log.Error(err, "Seeding orchestration plan")
+			h.eventRecorder.Event(mg, event.Warning(reasonCreated, "Create", err))
+			return err
+		}
+		h.eventRecorder.Event(mg, event.Normal(reasonCreated, "Create", fmt.Sprintf("Started orchestrated create for: %s", mg.GetName())))
+		return nil
+	}
 
 	apiCall, callInfo, err := builder.APICallBuilder(cli, clientInfo, apiaction.Create)
 	if err != nil {
@@ -662,6 +681,17 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	cli.Debug = meta.IsVerbose(mg)
 	cli.PrettyJSON = h.prettyJSONDebug
 	cli.SetAuth = clientInfo.SetAuth
+
+	// If the resource was provisioned by an orchestration plan, tear its completed steps down in reverse
+	// declaration order (each step's deleteCall), instead of the single delete verb.
+	if plan := orchestrationCreatePlan(clientInfo); plan != nil {
+		if err := h.runReverseDelete(ctx, cli, clientInfo, mg, plan, log); err != nil {
+			log.Error(err, "Orchestrated teardown")
+			h.eventRecorder.Event(mg, event.Warning(reasonDeleted, "Delete", err))
+			return err
+		}
+		return nil
+	}
 
 	_, err = unstructuredtools.GetFieldsFromUnstructured(mg, "status")
 	if err == ErrStatusNotFound {

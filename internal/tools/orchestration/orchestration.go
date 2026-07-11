@@ -63,8 +63,13 @@ func LiftStep(step getter.Step) getter.VerbsDescription {
 }
 
 // LiftStepCall converts a StepCall (a step's deleteCall) into a synthetic verb for reverse-order teardown.
+// For teardown a "not found" response means the sub-resource is already gone == success, so NotFoundCodes is
+// merged into TolerateCodes: the client short-circuits a tolerated code to a nil-error success (letting the
+// reverse loop continue), whereas it remaps a notFoundCodes match to a 404 *error* — which would otherwise
+// wedge the teardown and hold the finalizer.
 func LiftStepCall(sc getter.StepCall) getter.VerbsDescription {
 	req, resp := liftFieldMapping(sc.FieldMapping)
+	tolerate := append(append([]int{}, sc.TolerateCodes...), sc.NotFoundCodes...)
 	return getter.VerbsDescription{
 		Action:              SyntheticAction,
 		Method:              sc.Method,
@@ -72,8 +77,7 @@ func LiftStepCall(sc getter.StepCall) getter.VerbsDescription {
 		RequestFieldMapping: req,
 		FieldMapping:        resp,
 		SuccessCodes:        sc.SuccessCodes,
-		TolerateCodes:       sc.TolerateCodes,
-		NotFoundCodes:       sc.NotFoundCodes,
+		TolerateCodes:       tolerate,
 		Headers:             sc.Headers,
 		Queries:             sc.Queries,
 	}
