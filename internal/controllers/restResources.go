@@ -381,6 +381,16 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 		return err
 	}
 
+	// If create is asynchronous, drive the long-running operation to completion (poll until terminal),
+	// replacing the transient operation-reference response with the resource's real state when postGet is set.
+	if cfg := asyncConfigForAction(clientInfo.Resource.VerbsDescription, string(apiaction.Create)); cfg != nil {
+		response, err = driveAsync(ctx, cli, clientInfo, mg, cfg, response, reqConfiguration, log)
+		if err != nil {
+			log.Error(err, "Driving async create operation")
+			return err
+		}
+	}
+
 	// Clear status before populating with new values to ensure no stale values remain.
 	// This prevents, for instance, using outdated identifiers (e.g., status.id from a previously deleted
 	// external resource) that would cause reconciliation deadlock on subsequent Observe operations.
