@@ -643,8 +643,15 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 
 	clientInfo, err := h.swaggerInfoGetter.Get(mg)
 	if err != nil {
+		// Only proceed to delete the CR without teardown when the RestDefinition is GENUINELY absent. A
+		// transient failure to list/read definitions must HOLD the finalizer and retry, otherwise a
+		// momentary control-plane blip during a delete reconcile would orphan the external resource.
+		if !errors.Is(err, getter.ErrDefinitionNotFound) {
+			log.Error(err, "Getting REST client info; holding finalizer and retrying")
+			return err
+		}
 		log.Debug("Getting REST client info", "error", err)
-		log.Info("RestDefinition or Configuration not found, CR will be deleted but real external resource will not be deleted due to missing information")
+		log.Info("RestDefinition not found, CR will be deleted but real external resource will not be deleted due to missing information")
 		// We can still delete the CR, but we cannot delete the external resource.
 		err = unstructuredtools.SetConditions(mg, condition.Deleting())
 		if err != nil {
