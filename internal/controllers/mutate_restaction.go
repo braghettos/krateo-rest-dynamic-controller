@@ -1,0 +1,86 @@
+package restResources
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+
+	restclient "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client"
+	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client/apiaction"
+	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client/builder"
+	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/snowplow"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
+
+// mutateViaRestAction invokes a write-RESTAction (a create or delete sequence) via snowplow /call under the
+// controller's identity, passing the resource's per-instance context — and, for create, the whole spec (the
+// desired state) — as request extras. For create it clears stale status then projects any composed .status
+// the RESTAction returns (e.g. a server-assigned identifier).
+//
+// It returns an error on a hard (non-2xx) snowplow failure. The controller does NOT verify per-CALL success
+// WITHIN the sequence (snowplow may return 200 with a stage error), so:
+//   - create relies on level-based convergence: it is re-invoked each reconcile until Observe reports the
+//     resource exists, so the RESTAction MUST be idempotent AND the resource MUST have a get/findby observe
+//     that can report non-existence (a createApiRef resource with neither converges to Available unverified).
+//   - delete cannot rely on re-invocation (the finalizer is released once Delete returns nil), so the caller
+//     VERIFIES the resource is actually gone (externalResourceStillExists) before releasing the finalizer.
+func (h *handler) mutateViaRestAction(ctx context.Context, mg *unstructured.Unstructured, ref *getter.ApiRef, identifiers []string, action string, log logging.Logger) error {
+	if h.snowplowClient == nil {
+		return fmt.Errorf("resource declares %sApiRef %s/%s but no snowplow client is configured (set the snowplow/authn URLs)", action, ref.Namespace, ref.Name)
+	}
+	// create/update apply the DESIRED state, so they forward the whole spec and project the composed result;
+	// delete only needs to locate the resource (identifiers) and returns nothing to project.
+	writesDesiredState := strings.EqualFold(action, "create") || strings.EqualFold(action, "update")
+	extras := buildExtras(mg, ref.Extras, identifiers, writesDesiredState)
+	result, err := h.snowplowClient.Resolve(ctx, snowplow.ApiRef{Name: ref.Name, Namespace: ref.Namespace}, extras)
+	if err != nil {
+		return fmt.Errorf("resolving %s RESTAction %s/%s: %w", action, ref.Namespace, ref.Name, err)
+	}
+	if writesDesiredState && len(result) > 0 {
+		clearStatusFields(mg)
+		if werr := writeObservedStatus(mg, result); werr != nil {
+			return werr
+		}
+	}
+	log.Debug("Mutated via RESTAction", "action", action, "restAction", ref.Namespace+"/"+ref.Name)
+	return nil
+}
+
+// hasObserveVerb reports whether the resource declares a get or findby verb — the observe a createApiRef
+// resource needs so level-based convergence can verify the create actually took effect.
+func hasObserveVerb(verbs []getter.VerbsDescription) bool {
+	for _, v := range verbs {
+		if strings.EqualFold(v.Action, string(apiaction.Get)) || strings.EqualFold(v.Action, string(apiaction.FindBy)) {
+			return true
+		}
+	}
+	return false
+}
+
+// externalResourceStillExists probes whether the external resource is still present via the get verb, so a
+// RESTAction-delegated delete is only considered complete when the resource is verifiably gone — a RESTAction
+// returns HTTP 200 even if a teardown stage failed, so a bare success is not proof of deletion. It returns
+// (false, nil) when there is no usable get verb to check with, in which case the caller trusts the delete
+// result (a documented limitation for resources with no get observe).
+func (h *handler) externalResourceStillExists(ctx context.Context, cli restclient.UnstructuredClientInterface, clientInfo *getter.Info, mg *unstructured.Unstructured, log logging.Logger) (bool, error) {
+	getCall, getInfo, err := builder.APICallBuilder(cli, clientInfo, apiaction.Get)
+	if err != nil || getCall == nil || getInfo == nil {
+		log.Debug("No get verb to verify deletion; trusting the delete RESTAction result")
+		return false, nil
+	}
+	getReq := builder.BuildCallConfig(getInfo, mg, clientInfo.ConfigurationSpec)
+	if getReq == nil {
+		return false, nil
+	}
+	_, cerr := getCall(ctx, &http.Client{}, getInfo.Path, getReq)
+	if restclient.IsNotFoundError(cerr) {
+		return false, nil // gone
+	}
+	if cerr != nil {
+		return false, fmt.Errorf("verifying deletion via get: %w", cerr)
+	}
+	return true, nil // get succeeded: still present
+}

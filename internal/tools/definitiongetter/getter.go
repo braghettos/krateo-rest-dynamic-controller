@@ -215,6 +215,22 @@ type Resource struct {
 	ConfigurationFields []ConfigurationField `json:"configurationFields,omitempty"`
 	// VerbsDescription: the list of verbs to use on this resource
 	VerbsDescription []VerbsDescription `json:"verbsDescription"`
+	// ObserveApiRef, when set, delegates observe to a Snowplow RESTAction (invoked via snowplow /call)
+	// whose composed .status is projected into this resource's status. Mirrors the oasgen CRD field.
+	ObserveApiRef *ApiRef `json:"observeApiRef,omitempty"`
+	// CreateApiRef / DeleteApiRef / UpdateApiRef, when set, delegate create / delete / update to a Snowplow
+	// RESTAction (an idempotent multi-call sequence) invoked via snowplow /call. Mirrors the oasgen CRD fields.
+	CreateApiRef *ApiRef `json:"createApiRef,omitempty"`
+	DeleteApiRef *ApiRef `json:"deleteApiRef,omitempty"`
+	UpdateApiRef *ApiRef `json:"updateApiRef,omitempty"`
+}
+
+// ApiRef references a Snowplow RESTAction resolved via snowplow's /call endpoint.
+type ApiRef struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	// Extras are static key/values merged under the per-instance context passed to snowplow as request extras.
+	Extras map[string]interface{} `json:"extras,omitempty"`
 }
 
 type ConfigurationField struct {
