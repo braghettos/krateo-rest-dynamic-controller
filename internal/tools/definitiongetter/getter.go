@@ -215,6 +215,53 @@ type Resource struct {
 	ConfigurationFields []ConfigurationField `json:"configurationFields,omitempty"`
 	// VerbsDescription: the list of verbs to use on this resource
 	VerbsDescription []VerbsDescription `json:"verbsDescription"`
+	// Orchestration, when set, realizes create/delete as an ordered sequence of idempotent REST calls
+	// (steps) instead of the single verbs. Mirrors the oasgen CRD field.
+	Orchestration *Orchestration `json:"orchestration,omitempty"`
+}
+
+// Orchestration mirrors the multi-call lifecycle plans (see the oasgen CRD field).
+type Orchestration struct {
+	Create *StepPlan `json:"create,omitempty"`
+}
+
+// StepPlan is an ordered list of named steps executed in declaration order.
+type StepPlan struct {
+	Steps []Step `json:"steps"`
+}
+
+// Step is one call in a plan; the runtime lifts it into a synthetic VerbsDescription so the same client,
+// param resolution, response normalization and async engine run verbatim. Cross-step data flow is a request
+// FieldMapping entry whose inCustomResource reads status.orchestration.steps.<prior>.<field>.
+type Step struct {
+	Name              string             `json:"name"`
+	Method            string             `json:"method"`
+	Path              string             `json:"path"`
+	FieldMapping      []FieldMappingItem `json:"fieldMapping,omitempty"`
+	RequestTransform  *JQProgram         `json:"requestTransform,omitempty"`
+	ResponseTransform *JQProgram         `json:"responseTransform,omitempty"`
+	// Capture lists JSONPaths of this step's normalized response published under status.orchestration.steps.<name>.
+	Capture []string `json:"capture,omitempty"`
+	// DeleteCall is issued during reverse-order teardown for a completed step.
+	DeleteCall    *StepCall    `json:"deleteCall,omitempty"`
+	SuccessCodes  []int        `json:"successCodes,omitempty"`
+	TolerateCodes []int        `json:"tolerateCodes,omitempty"`
+	NotFoundCodes []int        `json:"notFoundCodes,omitempty"`
+	Headers       []HeaderItem `json:"headers,omitempty"`
+	Queries       []QueryParam `json:"queries,omitempty"`
+	Async         *AsyncConfig `json:"async,omitempty"`
+}
+
+// StepCall is a single teardown request used by a step's deleteCall.
+type StepCall struct {
+	Method        string             `json:"method"`
+	Path          string             `json:"path"`
+	FieldMapping  []FieldMappingItem `json:"fieldMapping,omitempty"`
+	SuccessCodes  []int              `json:"successCodes,omitempty"`
+	TolerateCodes []int              `json:"tolerateCodes,omitempty"`
+	NotFoundCodes []int              `json:"notFoundCodes,omitempty"`
+	Headers       []HeaderItem       `json:"headers,omitempty"`
+	Queries       []QueryParam       `json:"queries,omitempty"`
 }
 
 type ConfigurationField struct {
