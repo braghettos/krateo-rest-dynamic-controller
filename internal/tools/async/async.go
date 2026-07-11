@@ -23,6 +23,18 @@ import (
 const (
 	defaultInterval    = 1 * time.Second
 	defaultMaxAttempts = 10
+
+	// Upper bounds so an operator-set (or misconfigured) poll budget cannot pin a reconcile worker
+	// for an unreasonable duration. maxTotalTimeout caps the whole poll loop even when TimeoutSeconds
+	// is unset; a single poll request is additionally bounded by RequestTimeout at the call site.
+	maxInterval     = 60 * time.Second
+	maxAttemptsCap  = 120
+	maxTotalTimeout = 30 * time.Minute
+
+	// RequestTimeout bounds a single poll (or post-get) HTTP request so a black-hole endpoint that
+	// accepts the connection but never sends response headers cannot block a reconcile worker. Exported
+	// for the controller wiring that constructs the poll http.Client.
+	RequestTimeout = 30 * time.Second
 )
 
 // after is the delay primitive, overridable in tests to keep the poll loop fast.
@@ -76,12 +88,41 @@ func scalarToString(v interface{}, path string) (string, error) {
 			return strconv.FormatInt(int64(t), 10), nil
 		}
 		return strconv.FormatFloat(t, 'f', -1, 64), nil
+	case int:
+		return strconv.Itoa(t), nil
+	case int32:
+		return strconv.FormatInt(int64(t), 10), nil
 	case int64:
 		return strconv.FormatInt(t, 10), nil
 	case bool:
 		return strconv.FormatBool(t), nil
 	default:
 		return "", fmt.Errorf("operation handle at %q is not a scalar (%T)", path, v)
+	}
+}
+
+// RenderScalar renders a JSON scalar to a clean string for comparison, avoiding fmt's exponential form for
+// whole-number floats (which JSON decoding produces) so a numeric status such as 200 compares as "200"
+// rather than "2e+02". Non-scalars fall back to fmt's default formatting.
+func RenderScalar(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		if t == math.Trunc(t) && !math.IsInf(t, 0) {
+			return strconv.FormatInt(int64(t), 10)
+		}
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(t)
+	case int32:
+		return strconv.FormatInt(int64(t), 10)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	case bool:
+		return strconv.FormatBool(t)
+	default:
+		return fmt.Sprintf("%v", v)
 	}
 }
 
@@ -96,15 +137,31 @@ func PollUntilTerminal(ctx context.Context, cfg getter.PollConfig, operationID s
 	if interval <= 0 {
 		interval = defaultInterval
 	}
+	if interval > maxInterval {
+		interval = maxInterval
+	}
 	maxAttempts := cfg.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = defaultMaxAttempts
 	}
-	if cfg.TimeoutSeconds > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(cfg.TimeoutSeconds)*time.Second)
-		defer cancel()
+	if maxAttempts > maxAttemptsCap {
+		maxAttempts = maxAttemptsCap
 	}
+
+	// Always bound the overall duration, even when TimeoutSeconds is unset: the reconcile ctx may carry
+	// no deadline, and this ctx deadline also cancels an in-flight poll request, so a stuck (or
+	// misconfigured) operation can never pin a worker beyond the budget. When unset, derive a budget from
+	// the (clamped) attempt plan, including per-attempt request time.
+	total := time.Duration(cfg.TimeoutSeconds) * time.Second
+	if total <= 0 {
+		total = time.Duration(maxAttempts)*(interval+RequestTimeout) + interval
+	}
+	if total > maxTotalTimeout {
+		total = maxTotalTimeout
+	}
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, total)
+	defer cancel()
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {

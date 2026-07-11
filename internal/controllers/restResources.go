@@ -383,8 +383,11 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 
 	// If create is asynchronous, drive the long-running operation to completion (poll until terminal),
 	// replacing the transient operation-reference response with the resource's real state when postGet is set.
+	// Model A (blocking-poll) drives the operation inline: if the controller restarts mid-poll the create
+	// verb re-runs, so the create trigger must be idempotent (e.g. tolerate a duplicate via successCodes/409
+	// or a server-side upsert). Recovering the in-flight operation handle without re-triggering is Model B.
 	if cfg := asyncConfigForAction(clientInfo.Resource.VerbsDescription, string(apiaction.Create)); cfg != nil {
-		response, err = driveAsync(ctx, cli, clientInfo, mg, cfg, response, reqConfiguration, log)
+		response, err = driveAsync(ctx, cli, clientInfo, mg, cfg, string(apiaction.Create), response, reqConfiguration, log)
 		if err != nil {
 			log.Error(err, "Driving async create operation")
 			return err
@@ -497,7 +500,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 	// If update is asynchronous, drive the long-running operation to completion (poll until terminal),
 	// replacing the transient operation-reference response with the resource's real state when postGet is set.
 	if cfg := asyncConfigForAction(clientInfo.Resource.VerbsDescription, string(apiaction.Update)); cfg != nil {
-		response, err = driveAsync(ctx, cli, clientInfo, mg, cfg, response, reqConfiguration, log)
+		response, err = driveAsync(ctx, cli, clientInfo, mg, cfg, string(apiaction.Update), response, reqConfiguration, log)
 		if err != nil {
 			log.Error(err, "Driving async update operation")
 			return err
@@ -639,7 +642,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	// If delete is asynchronous, poll the operation to completion so the resource is actually gone before
 	// we report success. PostGet is not meaningful for delete (the resource no longer exists).
 	if cfg := asyncConfigForAction(clientInfo.Resource.VerbsDescription, string(apiaction.Delete)); cfg != nil {
-		if _, aerr := driveAsync(ctx, cli, clientInfo, mg, cfg, response, reqConfiguration, log); aerr != nil {
+		if _, aerr := driveAsync(ctx, cli, clientInfo, mg, cfg, string(apiaction.Delete), response, reqConfiguration, log); aerr != nil {
 			log.Error(aerr, "Driving async delete operation")
 			h.eventRecorder.Event(mg, event.Warning(reasonDeleted, "Delete", aerr))
 			return aerr

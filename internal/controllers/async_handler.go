@@ -36,7 +36,8 @@ func extractPollStatus(body map[string]interface{}, statusPath string) (string, 
 	if err != nil || !found {
 		return "", fmt.Errorf("statusPath %q not found in poll response", statusPath)
 	}
-	return fmt.Sprintf("%v", v), nil
+	// Render scalars cleanly so a numeric status (e.g. 200) compares as "200", not fmt's "2e+02".
+	return async.RenderScalar(v), nil
 }
 
 // driveAsync drives a long-running operation to completion (design #241, Model A blocking-poll): it
@@ -47,10 +48,13 @@ func extractPollStatus(body map[string]interface{}, statusPath string) (string, 
 //
 // The poll reuses the trigger call's resolved path parameters (e.g. {organization}) plus the extracted
 // {operationId}. The poll path must be declared in the OAS document (it goes through the same client Call).
-func driveAsync(ctx context.Context, cli restclient.UnstructuredClientInterface, clientInfo *getter.Info, mg *unstructured.Unstructured, cfg *getter.AsyncConfig, triggerResp restclient.Response, triggerReq *restclient.RequestConfiguration, log logging.Logger) (restclient.Response, error) {
+func driveAsync(ctx context.Context, cli restclient.UnstructuredClientInterface, clientInfo *getter.Info, mg *unstructured.Unstructured, cfg *getter.AsyncConfig, action string, triggerResp restclient.Response, triggerReq *restclient.RequestConfiguration, log logging.Logger) (restclient.Response, error) {
 	body, ok := triggerResp.ResponseBody.(map[string]interface{})
 	if !ok {
-		return triggerResp, fmt.Errorf("async trigger response body is not an object")
+		if triggerResp.ResponseBody == nil {
+			return triggerResp, fmt.Errorf("async trigger returned an empty body (e.g. 204 No Content); operationRef.in=body cannot extract a handle — header-based handles are not supported yet")
+		}
+		return triggerResp, fmt.Errorf("async trigger response body is not an object (got %T)", triggerResp.ResponseBody)
 	}
 	opID, err := async.ExtractOperationHandle(ctx, body, cfg.OperationRef)
 	if err != nil {
@@ -58,6 +62,14 @@ func driveAsync(ctx context.Context, cli restclient.UnstructuredClientInterface,
 	}
 	log.Debug("Async operation started, polling to completion", "operationId", opID, "pollPath", cfg.Poll.Path)
 
+	// The poll re-uses the trigger call's resolved parameters, query, headers and cookies so a poll
+	// endpoint that shares required inputs with the trigger (e.g. a required ?api-version query param, or
+	// an auth header) still validates. The extracted {operationId} path param takes precedence.
+	pollMethod := cfg.Poll.Method
+	if pollMethod == "" {
+		pollMethod = "GET"
+	}
+	pollClient := &http.Client{Timeout: async.RequestTimeout}
 	poll := func(ctx context.Context, id string) (string, error) {
 		params := map[string]string{"operationId": id}
 		if triggerReq != nil {
@@ -68,13 +80,13 @@ func driveAsync(ctx context.Context, cli restclient.UnstructuredClientInterface,
 			}
 		}
 		pollReq := &restclient.RequestConfiguration{
-			Method:     "GET",
+			Method:     pollMethod,
 			Parameters: params,
-			Query:      map[string]string{},
-			Headers:    map[string]string{},
-			Cookies:    map[string]string{},
+			Query:      copyStringMap(triggerReqQuery(triggerReq)),
+			Headers:    copyStringMap(triggerReqHeaders(triggerReq)),
+			Cookies:    copyStringMap(triggerReqCookies(triggerReq)),
 		}
-		resp, perr := cli.Call(ctx, &http.Client{}, cfg.Poll.Path, pollReq)
+		resp, perr := cli.Call(ctx, pollClient, cfg.Poll.Path, pollReq)
 		if perr != nil {
 			return "", perr
 		}
@@ -90,11 +102,13 @@ func driveAsync(ctx context.Context, cli restclient.UnstructuredClientInterface,
 	}
 	log.Debug("Async operation reached terminal success", "operationId", opID)
 
-	if !cfg.PostGet {
+	// PostGet re-reads the resource so status reflects its real state. It is meaningless (and harmful)
+	// for delete: a successful async delete has removed the resource, so a get would 404 and block the
+	// delete/finalizer forever. Skip it unconditionally for the delete verb.
+	if !cfg.PostGet || strings.EqualFold(action, "delete") {
 		return triggerResp, nil
 	}
 
-	// Re-read the resource so status reflects its real state.
 	getCall, getInfo, gerr := builder.APICallBuilder(cli, clientInfo, apiaction.Get)
 	if gerr != nil {
 		return triggerResp, fmt.Errorf("async postGet: building get call: %w", gerr)
@@ -103,9 +117,40 @@ func driveAsync(ctx context.Context, cli restclient.UnstructuredClientInterface,
 		return triggerResp, fmt.Errorf("async postGet requested but no get action is defined")
 	}
 	getReq := builder.BuildCallConfig(getInfo, mg, clientInfo.ConfigurationSpec)
-	getResp, gerr := getCall(ctx, &http.Client{}, getInfo.Path, getReq)
+	getResp, gerr := getCall(ctx, &http.Client{Timeout: async.RequestTimeout}, getInfo.Path, getReq)
 	if gerr != nil {
 		return triggerResp, fmt.Errorf("async postGet: get call: %w", gerr)
 	}
 	return getResp, nil
+}
+
+// copyStringMap returns a shallow copy of m (nil-safe), so mutating the poll request never mutates the
+// trigger request's shared maps.
+func copyStringMap(m map[string]string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+func triggerReqQuery(r *restclient.RequestConfiguration) map[string]string {
+	if r == nil {
+		return nil
+	}
+	return r.Query
+}
+
+func triggerReqHeaders(r *restclient.RequestConfiguration) map[string]string {
+	if r == nil {
+		return nil
+	}
+	return r.Headers
+}
+
+func triggerReqCookies(r *restclient.RequestConfiguration) map[string]string {
+	if r == nil {
+		return nil
+	}
+	return r.Cookies
 }

@@ -21,9 +21,11 @@ type mockAsyncClient struct {
 	pollBodies []map[string]interface{}
 	idx        int
 	callErr    error
+	lastConf   *restclient.RequestConfiguration // the configuration of the most recent Call
 }
 
 func (m *mockAsyncClient) Call(ctx context.Context, cli *http.Client, path string, conf *restclient.RequestConfiguration) (restclient.Response, error) {
+	m.lastConf = conf
 	if m.callErr != nil {
 		return restclient.Response{}, m.callErr
 	}
@@ -71,6 +73,46 @@ func TestExtractPollStatus(t *testing.T) {
 
 	_, err = extractPollStatus(body, "missing")
 	assert.Error(t, err)
+
+	// A numeric status must render cleanly (not fmt's "2e+02") so it can match string success values.
+	numBody := map[string]interface{}{"status": float64(200)}
+	s, err = extractPollStatus(numBody, "status")
+	require.NoError(t, err)
+	assert.Equal(t, "200", s)
+}
+
+// TestDriveAsync_DeleteSkipsPostGet proves postGet is never honored for the delete verb: a successful
+// async delete has removed the resource, so re-reading it would 404 and block the finalizer. With
+// clientInfo=nil, any attempt to build a postGet call would fail — reaching a clean return proves it was
+// skipped.
+func TestDriveAsync_DeleteSkipsPostGet(t *testing.T) {
+	cli := &mockAsyncClient{pollBodies: []map[string]interface{}{{"status": "succeeded"}}}
+	trigger := restclient.Response{ResponseBody: map[string]interface{}{"id": "op-del"}}
+
+	resp, err := driveAsync(context.Background(), cli, nil, &unstructured.Unstructured{}, asyncCfg(true), "delete", trigger, nil, logging.NewNopLogger())
+	require.NoError(t, err)
+	assert.Equal(t, trigger.ResponseBody, resp.ResponseBody, "delete returns the trigger response without a postGet re-read")
+}
+
+// TestDriveAsync_PollReusesTriggerInputs proves the poll re-uses the trigger's query/headers/cookies (so a
+// poll endpoint sharing a required query param such as api-version still validates) plus the extracted
+// operationId path param.
+func TestDriveAsync_PollReusesTriggerInputs(t *testing.T) {
+	cli := &mockAsyncClient{pollBodies: []map[string]interface{}{{"status": "succeeded"}}}
+	trigger := restclient.Response{ResponseBody: map[string]interface{}{"id": "op-77"}}
+	triggerReq := &restclient.RequestConfiguration{
+		Parameters: map[string]string{"organization": "acme"},
+		Query:      map[string]string{"api-version": "7.0"},
+		Headers:    map[string]string{"X-Trace": "abc"},
+	}
+
+	_, err := driveAsync(context.Background(), cli, nil, &unstructured.Unstructured{}, asyncCfg(false), "create", trigger, triggerReq, logging.NewNopLogger())
+	require.NoError(t, err)
+	require.NotNil(t, cli.lastConf)
+	assert.Equal(t, "7.0", cli.lastConf.Query["api-version"], "poll re-uses the trigger's required query param")
+	assert.Equal(t, "abc", cli.lastConf.Headers["X-Trace"], "poll re-uses the trigger's headers")
+	assert.Equal(t, "op-77", cli.lastConf.Parameters["operationId"], "poll injects the extracted operationId")
+	assert.Equal(t, "acme", cli.lastConf.Parameters["organization"], "poll re-uses the trigger's path params")
 }
 
 func asyncCfg(postGet bool) *getter.AsyncConfig {
@@ -92,7 +134,7 @@ func TestDriveAsync_PollsToTerminalSuccess(t *testing.T) {
 	trigger := restclient.Response{ResponseBody: map[string]interface{}{"id": "op-123", "status": "queued"}}
 	triggerReq := &restclient.RequestConfiguration{Parameters: map[string]string{"organization": "acme"}}
 
-	resp, err := driveAsync(context.Background(), cli, nil, &unstructured.Unstructured{}, asyncCfg(false), trigger, triggerReq, logging.NewNopLogger())
+	resp, err := driveAsync(context.Background(), cli, nil, &unstructured.Unstructured{}, asyncCfg(false), "create", trigger, triggerReq, logging.NewNopLogger())
 	require.NoError(t, err)
 	// Without postGet, the (trigger) response is returned for status population.
 	assert.Equal(t, trigger.ResponseBody, resp.ResponseBody)
@@ -103,7 +145,7 @@ func TestDriveAsync_TerminalFailure(t *testing.T) {
 	cli := &mockAsyncClient{pollBodies: []map[string]interface{}{{"status": "failed"}}}
 	trigger := restclient.Response{ResponseBody: map[string]interface{}{"id": "op-9"}}
 
-	_, err := driveAsync(context.Background(), cli, nil, &unstructured.Unstructured{}, asyncCfg(false), trigger, nil, logging.NewNopLogger())
+	_, err := driveAsync(context.Background(), cli, nil, &unstructured.Unstructured{}, asyncCfg(false), "create", trigger, nil, logging.NewNopLogger())
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "terminal failure")
 }
@@ -112,7 +154,7 @@ func TestDriveAsync_MissingHandle(t *testing.T) {
 	cli := &mockAsyncClient{}
 	trigger := restclient.Response{ResponseBody: map[string]interface{}{"no_id_here": true}}
 
-	_, err := driveAsync(context.Background(), cli, nil, &unstructured.Unstructured{}, asyncCfg(false), trigger, nil, logging.NewNopLogger())
+	_, err := driveAsync(context.Background(), cli, nil, &unstructured.Unstructured{}, asyncCfg(false), "create", trigger, nil, logging.NewNopLogger())
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "operation handle")
 }
