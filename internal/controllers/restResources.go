@@ -494,6 +494,16 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 		return err
 	}
 
+	// If update is asynchronous, drive the long-running operation to completion (poll until terminal),
+	// replacing the transient operation-reference response with the resource's real state when postGet is set.
+	if cfg := asyncConfigForAction(clientInfo.Resource.VerbsDescription, string(apiaction.Update)); cfg != nil {
+		response, err = driveAsync(ctx, cli, clientInfo, mg, cfg, response, reqConfiguration, log)
+		if err != nil {
+			log.Error(err, "Driving async update operation")
+			return err
+		}
+	}
+
 	// Clear status before populating with new values, unless the response has empty body.
 	// If response body is empty (e.g., 204 responses), we keep the existing status
 	// since the API indicates success without returning data (edge case).
@@ -619,11 +629,21 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		return fmt.Errorf("building call configuration")
 	}
 
-	_, err = apiCall(ctx, &http.Client{}, callInfo.Path, reqConfiguration)
+	response, err := apiCall(ctx, &http.Client{}, callInfo.Path, reqConfiguration)
 	if err != nil {
 		log.Error(err, "Performing REST call")
 		h.eventRecorder.Event(mg, event.Warning(reasonDeleted, "Delete", err))
 		return err
+	}
+
+	// If delete is asynchronous, poll the operation to completion so the resource is actually gone before
+	// we report success. PostGet is not meaningful for delete (the resource no longer exists).
+	if cfg := asyncConfigForAction(clientInfo.Resource.VerbsDescription, string(apiaction.Delete)); cfg != nil {
+		if _, aerr := driveAsync(ctx, cli, clientInfo, mg, cfg, response, reqConfiguration, log); aerr != nil {
+			log.Error(aerr, "Driving async delete operation")
+			h.eventRecorder.Event(mg, event.Warning(reasonDeleted, "Delete", aerr))
+			return aerr
+		}
 	}
 
 	log.Debug("Setting condition", "kind", mg.GetKind())
