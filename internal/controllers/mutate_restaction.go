@@ -31,15 +31,15 @@ func (h *handler) mutateViaRestAction(ctx context.Context, mg *unstructured.Unst
 	if h.snowplowClient == nil {
 		return fmt.Errorf("resource declares %sApiRef %s/%s but no snowplow client is configured (set the snowplow/authn URLs)", action, ref.Namespace, ref.Name)
 	}
-	isCreate := strings.EqualFold(action, "create")
-	extras := buildExtras(mg, ref.Extras, identifiers, isCreate)
+	// create/update apply the DESIRED state, so they forward the whole spec and project the composed result;
+	// delete only needs to locate the resource (identifiers) and returns nothing to project.
+	writesDesiredState := strings.EqualFold(action, "create") || strings.EqualFold(action, "update")
+	extras := buildExtras(mg, ref.Extras, identifiers, writesDesiredState)
 	result, err := h.snowplowClient.Resolve(ctx, snowplow.ApiRef{Name: ref.Name, Namespace: ref.Namespace}, extras)
 	if err != nil {
 		return fmt.Errorf("resolving %s RESTAction %s/%s: %w", action, ref.Namespace, ref.Name, err)
 	}
-	// A create sequence may return the provisioned resource's composed state (e.g. a server-assigned id);
-	// clear stale status first, then project it so the next Observe can use it. Delete returns nothing useful.
-	if isCreate && len(result) > 0 {
+	if writesDesiredState && len(result) > 0 {
 		clearStatusFields(mg)
 		if werr := writeObservedStatus(mg, result); werr != nil {
 			return werr

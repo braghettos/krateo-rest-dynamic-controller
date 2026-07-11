@@ -572,6 +572,27 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 	cli.PrettyJSON = h.prettyJSONDebug
 	cli.SetAuth = clientInfo.SetAuth
 
+	// If update is delegated to a RESTAction, invoke the re-apply sequence instead of the update verb (it
+	// forwards the whole spec — the desired state — and must be idempotent), project any composed result,
+	// and return.
+	if ref := clientInfo.Resource.UpdateApiRef; ref != nil {
+		if err := h.mutateViaRestAction(ctx, mg, ref, clientInfo.Resource.Identifiers, "update", log); err != nil {
+			log.Error(err, "Updating via RESTAction")
+			h.eventRecorder.Event(mg, event.Warning(reasonUpdated, "Update", err))
+			return err
+		}
+		if err := unstructuredtools.SetConditions(mg, condition.Available()); err != nil {
+			return err
+		}
+		if _, err := tools.UpdateStatus(ctx, mg, tools.UpdateOptions{Pluralizer: h.pluralizer, DynamicClient: h.dynamicClient}); err != nil {
+			log.Error(err, "Updating status")
+			h.eventRecorder.Event(mg, event.Warning(reasonUpdated, "Update", err))
+			return err
+		}
+		h.eventRecorder.Event(mg, event.Normal(reasonUpdated, "Update", fmt.Sprintf("Invoked update RESTAction for: %s", mg.GetName())))
+		return nil
+	}
+
 	apiCall, callInfo, err := builder.APICallBuilder(cli, clientInfo, apiaction.Update)
 	if err != nil {
 		log.Error(err, "Building API call")
