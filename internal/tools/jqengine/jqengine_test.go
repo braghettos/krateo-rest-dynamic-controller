@@ -104,6 +104,18 @@ func TestJQ_OneInOneOut(t *testing.T) {
 	assert.ErrorContains(t, err, "more than one output")
 }
 
+func TestJQ_OutputSizeCapped(t *testing.T) {
+	// A program emitting a value larger than the output cap is rejected instead of propagating downstream.
+	_, err := run(t, `"x" * 5000000`, nil) // ~5 MiB string > 4 MiB cap
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "output exceeds")
+
+	// A normal-sized output is unaffected.
+	out, err := run(t, `"x" * 10`, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "xxxxxxxxxx", out)
+}
+
 func TestJQ_MalformedRejectedAtCompile(t *testing.T) {
 	_, err := Compile("this is | not ( valid")
 	require.Error(t, err)
