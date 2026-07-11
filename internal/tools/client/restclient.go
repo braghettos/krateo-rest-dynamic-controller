@@ -25,7 +25,10 @@ import (
 // In order to have isPending method attached to a complete response object.
 type Response struct {
 	ResponseBody any
-	statusCode   int
+	// Headers carries the HTTP response headers, so callers (e.g. the async engine) can read an operation
+	// handle from a header such as Operation-Location on a 202 Accepted. May be nil.
+	Headers    http.Header
+	statusCode int
 }
 
 func (r *Response) IsPending() bool {
@@ -164,7 +167,7 @@ func (u *UnstructuredClient) Call(ctx context.Context, cli *http.Client, path st
 	// (e.g. an API that returns 404 for an optional sub-resource that is simply empty), skipping status
 	// validation and body parsing. The caller's nil-body handling then treats the resource as up-to-date.
 	if opts != nil && HasValidStatusCode(resp.StatusCode, opts.TolerateCodes...) {
-		return Response{ResponseBody: nil, statusCode: resp.StatusCode}, nil
+		return Response{ResponseBody: nil, Headers: resp.Header, statusCode: resp.StatusCode}, nil
 	}
 
 	getDoc, ok := pathItem.GetOperations().Get(strings.ToLower(httpMethod))
@@ -220,10 +223,13 @@ func (u *UnstructuredClient) Call(ctx context.Context, cli *http.Client, path st
 		return Response{}, fmt.Errorf("response body is empty for a status code which requires a body: %d", resp.StatusCode)
 	}
 
-	// For status codes that allow empty bodies, return nil directly, without going through handleResponse
+	// For status codes that allow empty bodies, return nil directly, without going through handleResponse.
+	// The headers are still surfaced so an async trigger returning 202 + Operation-Location with no body
+	// can have its operation handle extracted from the header.
 	if len(bodyBytes) == 0 && statusAllowsEmpty {
 		return Response{
 			ResponseBody: nil,
+			Headers:      resp.Header,
 			statusCode:   resp.StatusCode,
 		}, nil
 	}
@@ -235,6 +241,7 @@ func (u *UnstructuredClient) Call(ctx context.Context, cli *http.Client, path st
 
 	return Response{
 		ResponseBody: response,
+		Headers:      resp.Header,
 		statusCode:   resp.StatusCode,
 	}, nil
 }
