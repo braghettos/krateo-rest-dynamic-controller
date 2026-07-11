@@ -2,6 +2,7 @@ package async
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -25,14 +26,14 @@ func fastAfter(t *testing.T) {
 func TestExtractOperationHandle(t *testing.T) {
 	t.Run("body string handle", func(t *testing.T) {
 		body := map[string]interface{}{"id": "op-123", "status": "queued"}
-		h, err := ExtractOperationHandle(context.Background(), body, getter.OperationRef{In: "body", Path: "id"})
+		h, err := ExtractOperationHandle(context.Background(), body, nil, getter.OperationRef{In: "body", Path: "id"})
 		require.NoError(t, err)
 		assert.Equal(t, "op-123", h)
 	})
 
 	t.Run("body numeric handle rendered without exponent", func(t *testing.T) {
 		body := map[string]interface{}{"id": float64(2147483648)}
-		h, err := ExtractOperationHandle(context.Background(), body, getter.OperationRef{In: "body", Path: "id"})
+		h, err := ExtractOperationHandle(context.Background(), body, nil, getter.OperationRef{In: "body", Path: "id"})
 		require.NoError(t, err)
 		assert.Equal(t, "2147483648", h)
 	})
@@ -40,18 +41,45 @@ func TestExtractOperationHandle(t *testing.T) {
 	t.Run("jq derives id from a URL", func(t *testing.T) {
 		body := map[string]interface{}{"url": "https://dev.azure.com/org/_apis/operations/abc-42?api-version=7.1"}
 		ref := getter.OperationRef{In: "body", Path: "url", JQ: &getter.JQProgram{Inline: `capture("operations/(?<id>[^?]+)").id`}}
-		h, err := ExtractOperationHandle(context.Background(), body, ref)
+		h, err := ExtractOperationHandle(context.Background(), body, nil, ref)
 		require.NoError(t, err)
 		assert.Equal(t, "abc-42", h)
 	})
 
 	t.Run("missing handle errors", func(t *testing.T) {
-		_, err := ExtractOperationHandle(context.Background(), map[string]interface{}{}, getter.OperationRef{In: "body", Path: "id"})
+		_, err := ExtractOperationHandle(context.Background(), map[string]interface{}{}, nil, getter.OperationRef{In: "body", Path: "id"})
 		require.Error(t, err)
 	})
 
-	t.Run("header not yet supported", func(t *testing.T) {
-		_, err := ExtractOperationHandle(context.Background(), map[string]interface{}{}, getter.OperationRef{In: "header", Path: "Operation-Location"})
+	t.Run("header handle (case-insensitive)", func(t *testing.T) {
+		headers := http.Header{}
+		headers.Set("Operation-Location", "https://dev.azure.com/org/_apis/operations/op-55")
+		// Path uses a different case to prove http.Header canonicalization makes lookup case-insensitive.
+		h, err := ExtractOperationHandle(context.Background(), nil, headers, getter.OperationRef{In: "header", Path: "operation-location", JQ: &getter.JQProgram{Inline: `capture("operations/(?<id>[^?]+)").id`}})
+		require.NoError(t, err)
+		assert.Equal(t, "op-55", h)
+	})
+
+	t.Run("header handle without jq returns the raw value", func(t *testing.T) {
+		headers := http.Header{}
+		headers.Set("X-Operation-Id", "abc-99")
+		h, err := ExtractOperationHandle(context.Background(), nil, headers, getter.OperationRef{In: "header", Path: "X-Operation-Id"})
+		require.NoError(t, err)
+		assert.Equal(t, "abc-99", h)
+	})
+
+	t.Run("missing header errors", func(t *testing.T) {
+		_, err := ExtractOperationHandle(context.Background(), nil, http.Header{}, getter.OperationRef{In: "header", Path: "Operation-Location"})
+		assert.ErrorContains(t, err, "not found")
+	})
+
+	t.Run("header requested but no headers present", func(t *testing.T) {
+		_, err := ExtractOperationHandle(context.Background(), nil, nil, getter.OperationRef{In: "header", Path: "Operation-Location"})
+		assert.ErrorContains(t, err, "no headers")
+	})
+
+	t.Run("unsupported in errors", func(t *testing.T) {
+		_, err := ExtractOperationHandle(context.Background(), map[string]interface{}{}, nil, getter.OperationRef{In: "query", Path: "x"})
 		assert.ErrorContains(t, err, "not supported")
 	})
 }

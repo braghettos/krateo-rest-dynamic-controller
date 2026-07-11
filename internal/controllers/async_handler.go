@@ -49,14 +49,16 @@ func extractPollStatus(body map[string]interface{}, statusPath string) (string, 
 // The poll reuses the trigger call's resolved path parameters (e.g. {organization}) plus the extracted
 // {operationId}. The poll path must be declared in the OAS document (it goes through the same client Call).
 func driveAsync(ctx context.Context, cli restclient.UnstructuredClientInterface, clientInfo *getter.Info, mg *unstructured.Unstructured, cfg *getter.AsyncConfig, action string, triggerResp restclient.Response, triggerReq *restclient.RequestConfiguration, log logging.Logger) (restclient.Response, error) {
-	body, ok := triggerResp.ResponseBody.(map[string]interface{})
-	if !ok {
+	// The body is only required when the handle is read from the body; a header-based handle (e.g. a 202
+	// Accepted with an Operation-Location header and no body) is valid with a nil/absent body.
+	body, _ := triggerResp.ResponseBody.(map[string]interface{})
+	if strings.EqualFold(cfg.OperationRef.In, "body") && body == nil {
 		if triggerResp.ResponseBody == nil {
-			return triggerResp, fmt.Errorf("async trigger returned an empty body (e.g. 204 No Content); operationRef.in=body cannot extract a handle — header-based handles are not supported yet")
+			return triggerResp, fmt.Errorf("async trigger returned an empty body (e.g. 204 No Content); operationRef.in=body cannot extract a handle — use operationRef.in=header for header-based handles")
 		}
 		return triggerResp, fmt.Errorf("async trigger response body is not an object (got %T)", triggerResp.ResponseBody)
 	}
-	opID, err := async.ExtractOperationHandle(ctx, body, cfg.OperationRef)
+	opID, err := async.ExtractOperationHandle(ctx, body, triggerResp.Headers, cfg.OperationRef)
 	if err != nil {
 		return triggerResp, fmt.Errorf("extracting async operation handle: %w", err)
 	}

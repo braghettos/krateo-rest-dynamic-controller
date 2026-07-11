@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -40,21 +41,39 @@ const (
 // after is the delay primitive, overridable in tests to keep the poll loop fast.
 var after = time.After
 
-// ExtractOperationHandle derives the operation handle from the trigger response body per the OperationRef.
-// Only in="body" is supported for now: a JSONPath into the response body, optionally refined by an inline
-// jq program (e.g. to parse an id out of a URL). in="header" is deferred (the Response type does not yet
-// expose headers).
-func ExtractOperationHandle(ctx context.Context, body map[string]interface{}, opRef getter.OperationRef) (string, error) {
-	if !strings.EqualFold(opRef.In, "body") {
-		return "", fmt.Errorf("operationRef.in %q is not supported yet (only 'body')", opRef.In)
-	}
-	segs, err := pathparsing.ParsePath(opRef.Path)
-	if err != nil || len(segs) == 0 {
-		return "", fmt.Errorf("invalid operationRef.path %q", opRef.Path)
-	}
-	val, found, err := unstructured.NestedFieldNoCopy(body, segs...)
-	if err != nil || !found {
-		return "", fmt.Errorf("operation handle not found at %q", opRef.Path)
+// ExtractOperationHandle derives the operation handle from the trigger response per the OperationRef.
+//
+//   - in="body": a JSONPath into the response body (map), optionally refined by an inline jq program.
+//   - in="header": a response header name (e.g. Operation-Location on a 202 Accepted), optionally refined
+//     by jq to parse an id out of a URL. Header lookup is case-insensitive (http.Header canonicalization).
+//
+// In both cases an optional inline jq program refines the raw value (e.g. `capture("operations/(?<id>[^?]+)").id`
+// to pull an operationId out of a URL). The poll itself still targets the OAS-declared poll path with the
+// extracted handle bound to {operationId}; polling an absolute URL taken verbatim from a header is future work.
+func ExtractOperationHandle(ctx context.Context, body map[string]interface{}, headers http.Header, opRef getter.OperationRef) (string, error) {
+	var val interface{}
+	switch strings.ToLower(opRef.In) {
+	case "body":
+		segs, err := pathparsing.ParsePath(opRef.Path)
+		if err != nil || len(segs) == 0 {
+			return "", fmt.Errorf("invalid operationRef.path %q", opRef.Path)
+		}
+		v, found, err := unstructured.NestedFieldNoCopy(body, segs...)
+		if err != nil || !found {
+			return "", fmt.Errorf("operation handle not found at %q", opRef.Path)
+		}
+		val = v
+	case "header":
+		if headers == nil {
+			return "", fmt.Errorf("operationRef.in=header but the trigger response carried no headers")
+		}
+		raw := headers.Get(opRef.Path)
+		if raw == "" {
+			return "", fmt.Errorf("operation handle header %q not found or empty", opRef.Path)
+		}
+		val = raw
+	default:
+		return "", fmt.Errorf("operationRef.in %q is not supported (want 'body' or 'header')", opRef.In)
 	}
 
 	if opRef.JQ != nil && opRef.JQ.Inline != "" {

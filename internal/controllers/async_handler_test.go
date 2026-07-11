@@ -94,6 +94,25 @@ func TestDriveAsync_DeleteSkipsPostGet(t *testing.T) {
 	assert.Equal(t, trigger.ResponseBody, resp.ResponseBody, "delete returns the trigger response without a postGet re-read")
 }
 
+// TestDriveAsync_HeaderHandleEmptyBody proves the canonical 202-Accepted async shape works: an operation
+// handle read from a response header (Operation-Location) with no body at all, refined by jq to an id.
+func TestDriveAsync_HeaderHandleEmptyBody(t *testing.T) {
+	cli := &mockAsyncClient{pollBodies: []map[string]interface{}{{"status": "succeeded"}}}
+	headers := http.Header{}
+	headers.Set("Operation-Location", "https://dev.azure.com/org/_apis/operations/op-hdr?api-version=7.0")
+	trigger := restclient.Response{ResponseBody: nil, Headers: headers} // 202 Accepted, empty body
+
+	cfg := &getter.AsyncConfig{
+		OperationRef: getter.OperationRef{In: "header", Path: "Operation-Location", JQ: &getter.JQProgram{Inline: `capture("operations/(?<id>[^?]+)").id`}},
+		Poll:         getter.PollConfig{Path: "/ops/{operationId}", StatusPath: "status", SuccessValues: []string{"succeeded"}, MaxAttempts: 3},
+	}
+
+	_, err := driveAsync(context.Background(), cli, nil, &unstructured.Unstructured{}, cfg, "create", trigger, nil, logging.NewNopLogger())
+	require.NoError(t, err)
+	require.NotNil(t, cli.lastConf)
+	assert.Equal(t, "op-hdr", cli.lastConf.Parameters["operationId"], "handle extracted from Operation-Location header and bound to {operationId}")
+}
+
 // TestDriveAsync_PollReusesTriggerInputs proves the poll re-uses the trigger's query/headers/cookies (so a
 // poll endpoint sharing a required query param such as api-version still validates) plus the extracted
 // operationId path param.
