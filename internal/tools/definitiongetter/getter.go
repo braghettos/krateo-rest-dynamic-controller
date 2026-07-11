@@ -153,6 +153,11 @@ type VerbsDescription struct {
 	TolerateCodes []int `json:"tolerateCodes,omitempty"`
 	// NotFoundCodes are status codes remapped to a not-found result for this verb.
 	NotFoundCodes []int `json:"notFoundCodes,omitempty"`
+	// NotFoundBody is a gojq boolean predicate against the successful observe-response; when it returns true
+	// the external resource is treated as not existing (body-based counterpart of NotFoundCodes). Its input
+	// is the RAW body: for get, the whole GET body (e.g. .items|length==0); for findby, the single matched
+	// item (a no-match already yields not-found), e.g. a tombstone .status == "deleted".
+	NotFoundBody *JQProgram `json:"notFoundBody,omitempty"`
 	// Async declares long-running-operation handling for this mutating verb.
 	Async *AsyncConfig `json:"async,omitempty"`
 }

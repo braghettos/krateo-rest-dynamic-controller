@@ -248,6 +248,34 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		}
 	}
 
+	// Body-based absence: some APIs signal "not found" with a successful (2xx) body rather than a 404/other
+	// status code (which notFoundCodes already handles). If a NotFoundBody predicate is declared for the
+	// observe verb and it matches, treat the resource as not existing so the reconciler (re)creates it. The
+	// predicate reads the RAW response (before normalization), so it must be written against the API shape:
+	//   - get:    the whole GET body — e.g. a wrapper with an empty list (.items|length==0), a {"deleted":
+	//             true} flag, or a state field ({"status":"NOT_FOUND"}).
+	//   - findby: the SINGLE matched item (a no-match already returned not-found above via the client's 404,
+	//             so this block is only reached on a match) — use it for a tombstone/soft-deleted match such
+	//             as .status == "deleted"; a list-shaped predicate is meaningless against a single item.
+	// It is skipped while the resource is Pending: during an async create the trigger has fired and the GET
+	// may return a transient provisioning body the predicate could read as absent, which would re-trigger
+	// Create in a loop — the same reason the notfound handlers above defer to the Pending condition.
+	if prog := notFoundBodyForAction(clientInfo.Resource.VerbsDescription, observeAction); prog != nil &&
+		response.ResponseBody != nil && !unstructuredtools.IsConditionSet(mg, customcondition.Pending()) {
+		absent, perr := evalNotFoundBody(ctx, prog, response.ResponseBody)
+		if perr != nil {
+			log.Error(perr, "Evaluating notFoundBody predicate")
+			return controller.ExternalObservation{}, perr
+		}
+		if absent {
+			log.Debug("External resource treated as not found by notFoundBody predicate", "kind", mg.GetKind())
+			return controller.ExternalObservation{
+				ResourceExists:   false,
+				ResourceUpToDate: false,
+			}, nil
+		}
+	}
+
 	// Response can be nil if the API does not return anything with a proper status code (204 No Content, 304 Not Modified) on an Observe call.
 	// In this case, we assume the resource is up-to-date.
 	if response.ResponseBody == nil {
