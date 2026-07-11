@@ -10,12 +10,20 @@ package jqengine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/itchyny/gojq"
 )
+
+// maxOutputBytes bounds the value a program may emit. Programs come from a RestDefinition and may be sourced
+// from an external jq module, so cap the output a hostile/buggy program can push into downstream state (e.g.
+// a CR status). The run timeout bounds compute time; this bounds propagated size.
+const maxOutputBytes = 4 << 20 // 4 MiB
+
+var errOutputTooLarge = fmt.Errorf("jq program output exceeds %d bytes", maxOutputBytes)
 
 // DefaultTimeout bounds a single program execution. Programs come from a user's RestDefinition and run on
 // the reconcile hot path, so an unbounded program (e.g. `until(false;.)`) must not hang a worker. A caller
@@ -92,7 +100,33 @@ func (p *Program) Run(ctx context.Context, input interface{}) (interface{}, erro
 		return nil, fmt.Errorf("jq program produced more than one output")
 	}
 
+	if err := checkOutputSize(v); err != nil {
+		return nil, err
+	}
 	return canonicalJSON(v)
+}
+
+// checkOutputSize streams v through a size-limited encoder so a program cannot emit an enormous value into
+// downstream state; the check's own allocation is bounded to maxOutputBytes. A non-size encode error is left
+// for canonicalJSON to surface.
+func checkOutputSize(v interface{}) error {
+	if err := json.NewEncoder(&limitedWriter{max: maxOutputBytes}).Encode(v); err != nil && errors.Is(err, errOutputTooLarge) {
+		return errOutputTooLarge
+	}
+	return nil
+}
+
+type limitedWriter struct {
+	n   int
+	max int
+}
+
+func (w *limitedWriter) Write(p []byte) (int, error) {
+	w.n += len(p)
+	if w.n > w.max {
+		return 0, errOutputTooLarge
+	}
+	return len(p), nil
 }
 
 // Canonical normalizes any value to JSON-canonical Go types (map[string]interface{}, []interface{},

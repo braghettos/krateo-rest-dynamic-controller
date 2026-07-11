@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -17,6 +18,11 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 )
+
+// ErrDefinitionNotFound is returned by Get when no matching RestDefinition exists for the resource (a
+// genuine absence), as distinct from a transient failure to list/read definitions. Callers (e.g. Delete)
+// use it to decide whether it is safe to proceed without the definition or must retry.
+var ErrDefinitionNotFound = errors.New("no matching RestDefinition found")
 
 // Pagination defines the pagination strategy for a "findby" action.
 // Currently, only 'continuationToken' is supported.
@@ -313,7 +319,7 @@ func (g *dynamicGetter) Get(un *unstructured.Unstructured) (*Info, error) {
 		return nil, fmt.Errorf("getting definitions for '%v' in namespace: %s - %w", gvr.String(), un.GetNamespace(), err)
 	}
 	if len(all.Items) == 0 {
-		return nil, fmt.Errorf("no definitions found for '%v' in namespace: %s", gvr, un.GetNamespace())
+		return nil, fmt.Errorf("%w for '%v' in namespace %s", ErrDefinitionNotFound, gvr, un.GetNamespace())
 	}
 
 	for _, item := range all.Items {
@@ -387,7 +393,7 @@ func (g *dynamicGetter) Get(un *unstructured.Unstructured) (*Info, error) {
 			return info, nil
 		}
 	}
-	return nil, fmt.Errorf("no definitions found for '%v' in namespace: %s", gvr, un.GetNamespace())
+	return nil, fmt.Errorf("%w for '%v' in namespace %s", ErrDefinitionNotFound, gvr, un.GetNamespace())
 }
 
 // resolveJQRefs walks every JQProgram carried by the resource's verbs and materializes any module reference
