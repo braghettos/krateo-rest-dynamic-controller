@@ -21,17 +21,23 @@ import (
 // Available. It returns handled=true so the caller returns immediately (this replaces the get/findby observe);
 // handled=false only when no observeApiRef is declared, so the caller falls through to the normal observe.
 //
-// Scope (increment 1): this is for observe-ONLY resources — the RESTAction composes the observed state each
-// reconcile and the resource is reported existing + up-to-date, so no create/update is driven and there is
-// no "observed but not found" / drift signal (deferred). The referenced RESTAction is trusted platform
-// configuration: its composed .status is projected into this resource's status (except the runtime-managed
-// conditions / observedGeneration), so it must be authored to return the intended shape.
+// With no notFoundExpr/upToDateExpr the RESTAction composes the observed state each reconcile and the
+// resource is reported existing + up-to-date (observe-only projection). When notFoundExpr / upToDateExpr are
+// declared, the delegated observe reports non-existence (=> create) / drift (=> update), so it composes with
+// create/update/delete RESTActions. The referenced RESTAction is trusted platform configuration: its
+// composed .status is projected into this resource's status (except the runtime-managed conditions /
+// observedGeneration), so it must be authored to return the intended shape.
 func (h *handler) observeViaRestAction(ctx context.Context, mg *unstructured.Unstructured, ref *getter.ApiRef, identifiers []string, log logging.Logger) (controller.ExternalObservation, bool, error) {
 	if ref == nil {
 		return controller.ExternalObservation{}, false, nil
 	}
 	if h.snowplowClient == nil {
 		return controller.ExternalObservation{}, true, fmt.Errorf("resource declares observeApiRef %s/%s but no snowplow client is configured (set the snowplow/authn URLs)", ref.Namespace, ref.Name)
+	}
+	// If a Model B async operation is in flight (from an OAS create/update verb), defer to the normal observe
+	// so it is polled to completion, rather than short-circuiting to the RESTAction observe.
+	if opID, _ := asyncOperationInFlight(mg); opID != "" {
+		return controller.ExternalObservation{}, false, nil
 	}
 
 	extras := buildExtras(mg, ref.Extras, identifiers, false)
@@ -41,10 +47,43 @@ func (h *handler) observeViaRestAction(ctx context.Context, mg *unstructured.Uns
 		return controller.ExternalObservation{}, true, fmt.Errorf("resolving observe RESTAction %s/%s: %w", ref.Namespace, ref.Name, err)
 	}
 
+	// The existence / drift predicates evaluate against {spec, status}, where status is the composed result.
+	predCtx := map[string]interface{}{"status": result}
+	if spec, found, _ := unstructured.NestedMap(mg.Object, "spec"); found {
+		predCtx["spec"] = spec
+	}
+
+	// Existence: if the observe reports the resource absent, return not-exists so the controller creates it
+	// (composing with createApiRef). Do not project status / mark Available in that case.
+	if notFound, ferr := evalBoolPredicate(ctx, ref.NotFoundExpr, predCtx, "observeApiRef.notFoundExpr"); ferr != nil {
+		return controller.ExternalObservation{}, true, fmt.Errorf("evaluating observeApiRef.notFoundExpr: %w", ferr)
+	} else if notFound {
+		log.Debug("Observe RESTAction reports the resource absent", "restAction", ref.Namespace+"/"+ref.Name)
+		return controller.ExternalObservation{ResourceExists: false, ResourceUpToDate: false}, true, nil
+	}
+
+	// Drift: default up-to-date unless a SOURCED upToDateExpr reports otherwise (composing with updateApiRef).
+	// A declared-but-source-less predicate is treated as "no drift signal" (up-to-date) rather than reading
+	// as false, which would thrash Update every reconcile.
+	upToDate := true
+	if ex := ref.UpToDateExpr; ex != nil && (ex.Inline != "" || ex.Ref != "") {
+		utd, derr := evalBoolPredicate(ctx, ex, predCtx, "observeApiRef.upToDateExpr")
+		if derr != nil {
+			return controller.ExternalObservation{}, true, fmt.Errorf("evaluating observeApiRef.upToDateExpr: %w", derr)
+		}
+		upToDate = utd
+	}
+
 	if err := writeObservedStatus(mg, result); err != nil {
 		return controller.ExternalObservation{}, true, err
 	}
-	if err := unstructuredtools.SetConditions(mg, condition.Available()); err != nil {
+	// Available when up-to-date; report Unavailable while drifted (an update will be driven).
+	cond := condition.Available()
+	if !upToDate {
+		cond = condition.Unavailable()
+		cond.Message = "drift reported by observeApiRef.upToDateExpr"
+	}
+	if err := unstructuredtools.SetConditions(mg, cond); err != nil {
 		return controller.ExternalObservation{}, true, err
 	}
 	updated, uerr := tools.UpdateStatus(ctx, mg, tools.UpdateOptions{Pluralizer: h.pluralizer, DynamicClient: h.dynamicClient})
@@ -52,11 +91,12 @@ func (h *handler) observeViaRestAction(ctx context.Context, mg *unstructured.Uns
 		return controller.ExternalObservation{}, true, fmt.Errorf("updating status from observe RESTAction: %w", uerr)
 	}
 	*mg = *updated
-	log.Debug("Observed via RESTAction", "restAction", ref.Namespace+"/"+ref.Name)
+	log.Debug("Observed via RESTAction", "restAction", ref.Namespace+"/"+ref.Name, "upToDate", upToDate)
 
-	// The RESTAction composes the observed state each reconcile; the controller owns no create/update for an
-	// observe-only resource, so it is reported as existing and up-to-date.
-	return controller.ExternalObservation{ResourceExists: true, ResourceUpToDate: true}, true, nil
+	// The RESTAction composes the observed state each reconcile. With no notFoundExpr/upToDateExpr the
+	// resource is reported existing + up-to-date (observe-only); with them, non-existence/drift compose with
+	// create/update RESTActions.
+	return controller.ExternalObservation{ResourceExists: true, ResourceUpToDate: upToDate}, true, nil
 }
 
 // buildExtras builds the request extras passed to snowplow: the RESTAction's static extras form the base,

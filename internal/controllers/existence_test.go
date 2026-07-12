@@ -9,6 +9,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestEvalBoolPredicate_SpecStatusContext(t *testing.T) {
+	ctx := context.Background()
+	// The observe existence/drift predicates evaluate against {spec, status}.
+	body := map[string]interface{}{
+		"spec":   map[string]interface{}{"size": "large"},
+		"status": map[string]interface{}{"size": "small"},
+	}
+
+	// notFoundExpr: the resource is absent when the composed status has no id
+	nf, err := evalBoolPredicate(ctx, &getter.JQProgram{Inline: `.status.id == null`}, body, "notFoundExpr")
+	require.NoError(t, err)
+	assert.True(t, nf, "no status.id -> not found")
+
+	// upToDateExpr: comparing desired spec to observed status
+	utd, err := evalBoolPredicate(ctx, &getter.JQProgram{Inline: `.spec.size == .status.size`}, body, "upToDateExpr")
+	require.NoError(t, err)
+	assert.False(t, utd, "spec.size != status.size -> drift")
+
+	// nil predicate is a no-op (false)
+	b, err := evalBoolPredicate(ctx, nil, body, "x")
+	require.NoError(t, err)
+	assert.False(t, b)
+
+	// a non-boolean result fails loudly
+	_, err = evalBoolPredicate(ctx, &getter.JQProgram{Inline: `.spec.size`}, body, "upToDateExpr")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "must return a boolean")
+}
+
 func TestNotFoundBodyForAction(t *testing.T) {
 	verbs := []getter.VerbsDescription{
 		{Action: "get", Method: "GET", Path: "/x", NotFoundBody: &getter.JQProgram{Inline: `.deleted == true`}},
