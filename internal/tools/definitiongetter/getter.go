@@ -238,6 +238,11 @@ type ApiRef struct {
 	Namespace string `json:"namespace"`
 	// Extras are static key/values merged under the per-instance context passed to snowplow as request extras.
 	Extras map[string]interface{} `json:"extras,omitempty"`
+	// NotFoundExpr / UpToDateExpr (observeApiRef only) are gojq boolean predicates over {spec, status} - where
+	// status is the RESTAction's composed result - that let a delegated observe report non-existence
+	// (NotFoundExpr true => create) and drift (UpToDateExpr false => update), composing with create/update.
+	NotFoundExpr *JQProgram `json:"notFoundExpr,omitempty"`
+	UpToDateExpr *JQProgram `json:"upToDateExpr,omitempty"`
 }
 
 type ConfigurationField struct {
@@ -418,6 +423,14 @@ func (g *dynamicGetter) resolveJQRefs(ctx context.Context, info *Info, ownNamesp
 		}
 		if v.Async != nil {
 			if err := g.materializeJQ(ctx, v.Async.OperationRef.JQ, ownNamespace); err != nil {
+				return err
+			}
+		}
+	}
+	// The observeApiRef existence/drift predicates may also be module refs.
+	if ar := info.Resource.ObserveApiRef; ar != nil {
+		for _, p := range []*JQProgram{ar.NotFoundExpr, ar.UpToDateExpr} {
+			if err := g.materializeJQ(ctx, p, ownNamespace); err != nil {
 				return err
 			}
 		}
