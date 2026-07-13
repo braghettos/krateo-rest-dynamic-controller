@@ -76,7 +76,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: 'stable'
+          go-version-file: go.mod
 
       # Agnostic CRD generation: each CRD-owning repo exposes a single `make generate` target
       # that regenerates ./crds. A repo with no such target is not a CRD owner — skip cleanly.
