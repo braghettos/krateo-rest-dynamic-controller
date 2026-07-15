@@ -11,8 +11,18 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// isCRUpdated checks if the CR was updated by comparing the fields in the CR with the response from the API call, if existing cr fields are different from the response, it returns false
-func isCRUpdated(mg *unstructured.Unstructured, rm map[string]interface{}) (comparison.ComparisonResult, error) {
+// CompareScope values for Resource.CompareScope, controlling which spec fields the drift comparison considers.
+const (
+	// compareScopeFullSpec (the default, also when unset) compares every spec field against the response.
+	compareScopeFullSpec = "fullSpec"
+	// compareScopeIdentifiersAndStatus compares ONLY the identifiers + additionalStatusFields, ignoring the
+	// rest of the spec for drift purposes.
+	compareScopeIdentifiersAndStatus = "identifiersAndStatus"
+)
+
+// isCRUpdated checks if the CR was updated by comparing the fields in the CR with the response from the API call, if existing cr fields are different from the response, it returns false.
+// compareScope selects which spec fields participate: "" / "fullSpec" compares the whole spec; "identifiersAndStatus" restricts the comparison to scopeFields (identifiers + additionalStatusFields).
+func isCRUpdated(mg *unstructured.Unstructured, rm map[string]interface{}, compareScope string, scopeFields []string) (comparison.ComparisonResult, error) {
 	//log.Print("isCRUpdated - starting comparison between mg spec and rm")
 	if mg == nil {
 		return comparison.ComparisonResult{
@@ -26,14 +36,6 @@ func isCRUpdated(mg *unstructured.Unstructured, rm map[string]interface{}) (comp
 	// Extract the "spec" fields from the mg object
 	m, err := unstructuredtools.GetFieldsFromUnstructured(mg, "spec")
 
-	// Debug prints
-	//log.Print("isCRUpdated - comparing mg spec with rm")
-	// print the mg spec for debugging
-	//log.Print("mg spec fields:")
-	//for k, v := range m {
-	//	log.Printf("mg spec field: %s = %v", k, v)
-	//}
-
 	if err != nil {
 		return comparison.ComparisonResult{
 			IsEqual: false,
@@ -43,14 +45,42 @@ func isCRUpdated(mg *unstructured.Unstructured, rm map[string]interface{}) (comp
 		}, fmt.Errorf("getting spec fields: %w", err)
 	}
 
-	// Debug prints
-	//log.Print("rm fields:")
-	//for k, v := range rm {
-	//	log.Printf("rm field: %s = %v", k, v)
-	//}
+	// When compareScope restricts drift to the resource's identity + observable-state fields, project the spec
+	// down to just those paths before comparing; everything else in the spec is intentionally ignored for drift.
+	if compareScope == compareScopeIdentifiersAndStatus {
+		m, err = projectSpecFields(m, scopeFields)
+		if err != nil {
+			return comparison.ComparisonResult{
+				IsEqual: false,
+				Reason:  &comparison.Reason{Reason: "projecting compareScope fields"},
+			}, fmt.Errorf("projecting compareScope fields: %w", err)
+		}
+	}
 
 	//log.Print("isCRUpdated - performing comparison")
 	return comparison.CompareExisting(m, rm)
+}
+
+// projectSpecFields returns a new map containing only the given dot-notation paths that are present in spec,
+// deep-copied so the projection never aliases the live object. Paths absent from spec are skipped (e.g. a
+// server-assigned identifier that only appears in the response contributes nothing to drift). It backs
+// compareScope=identifiersAndStatus, restricting the drift comparison to the resource's identity + status fields.
+func projectSpecFields(spec map[string]interface{}, paths []string) (map[string]interface{}, error) {
+	out := map[string]interface{}{}
+	for _, p := range paths {
+		pathSegments, err := pathparsing.ParsePath(p)
+		if err != nil || len(pathSegments) == 0 {
+			continue
+		}
+		value, found, err := unstructured.NestedFieldNoCopy(spec, pathSegments...)
+		if err != nil || !found {
+			continue
+		}
+		if err := unstructured.SetNestedField(out, deepcopy.DeepCopyJSONValue(value), pathSegments...); err != nil {
+			return nil, fmt.Errorf("projecting field %q: %w", p, err)
+		}
+	}
+	return out, nil
 }
 
 // populateStatusFields populates the status fields in the mg object with the values from the response body of the API call.

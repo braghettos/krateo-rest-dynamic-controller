@@ -11,11 +11,13 @@ import (
 
 func TestIsCRUpdated(t *testing.T) {
 	tests := []struct {
-		name     string
-		mg       *unstructured.Unstructured
-		rm       map[string]interface{}
-		wantErr  bool
-		expected bool
+		name         string
+		mg           *unstructured.Unstructured
+		rm           map[string]interface{}
+		compareScope string
+		scopeFields  []string
+		wantErr      bool
+		expected     bool
 	}{
 		{
 			name: "identical values - should be equal",
@@ -167,11 +169,98 @@ func TestIsCRUpdated(t *testing.T) {
 			rm:      map[string]interface{}{},
 			wantErr: true,
 		},
+		// --- compareScope: identifiersAndStatus ---
+		{
+			// The PullRequest case from issue #27: spec.head is a string, the response head is an object, so
+			// under fullSpec they compare unequal (false drift). This is the SAME data as the next case.
+			name: "fullSpec: divergently-shaped field causes false drift",
+			mg: &unstructured.Unstructured{Object: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"number": int64(5),
+					"head":   "builder/x",
+					"base":   "main",
+				},
+			}},
+			rm: map[string]interface{}{
+				"number": int64(5),
+				"head":   map[string]interface{}{"ref": "builder/x"},
+				"state":  "open",
+			},
+			compareScope: compareScopeFullSpec,
+			expected:     false,
+		},
+		{
+			name: "identifiersAndStatus: ignores a divergently-shaped non-identity field",
+			mg: &unstructured.Unstructured{Object: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"number": int64(5),
+					"head":   "builder/x",
+					"base":   "main",
+				},
+			}},
+			rm: map[string]interface{}{
+				"number": int64(5),
+				"head":   map[string]interface{}{"ref": "builder/x"},
+				"state":  "open",
+			},
+			compareScope: compareScopeIdentifiersAndStatus,
+			scopeFields:  []string{"number"},
+			expected:     true, // only `number` is compared, `head`/`base` are out of scope
+		},
+		{
+			name: "identifiersAndStatus: still detects drift on an in-scope identity field",
+			mg: &unstructured.Unstructured{Object: map[string]interface{}{
+				"spec": map[string]interface{}{"number": int64(5), "title": "x"},
+			}},
+			rm:           map[string]interface{}{"number": int64(6), "title": "x"},
+			compareScope: compareScopeIdentifiersAndStatus,
+			scopeFields:  []string{"number"},
+			expected:     false, // real drift on the identifier is reported
+		},
+		{
+			name: "identifiersAndStatus: nested (dot-notation) scope field, out-of-scope junk ignored",
+			mg: &unstructured.Unstructured{Object: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"a":    map[string]interface{}{"b": "v"},
+					"junk": "z",
+				},
+			}},
+			rm: map[string]interface{}{
+				"a":    map[string]interface{}{"b": "v"},
+				"junk": map[string]interface{}{"different": true},
+			},
+			compareScope: compareScopeIdentifiersAndStatus,
+			scopeFields:  []string{"a.b"},
+			expected:     true,
+		},
+		{
+			name: "identifiersAndStatus: scope field absent from spec is skipped (no drift from server-only ids)",
+			mg: &unstructured.Unstructured{Object: map[string]interface{}{
+				"spec": map[string]interface{}{"number": int64(5)},
+			}},
+			rm:           map[string]interface{}{"number": int64(5), "serverId": "abc"},
+			compareScope: compareScopeIdentifiersAndStatus,
+			scopeFields:  []string{"number", "serverId"},
+			expected:     true,
+		},
+		{
+			// Documents the runtime behavior the oasgen CEL guard prevents: with an empty scope set, nothing is
+			// compared, so the resource always reads up-to-date even under real drift. The CEL rule forbids
+			// enabling identifiersAndStatus without at least one identifier/additionalStatusField.
+			name: "identifiersAndStatus: empty scope compares nothing (guarded by CEL, not runtime)",
+			mg: &unstructured.Unstructured{Object: map[string]interface{}{
+				"spec": map[string]interface{}{"number": int64(5)},
+			}},
+			rm:           map[string]interface{}{"number": int64(6)},
+			compareScope: compareScopeIdentifiersAndStatus,
+			scopeFields:  nil,
+			expected:     true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := isCRUpdated(tt.mg, tt.rm)
+			result, err := isCRUpdated(tt.mg, tt.rm, tt.compareScope, tt.scopeFields)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("isCRUpdated() error = %v, wantErr %v", err, tt.wantErr)
 				return

@@ -355,7 +355,12 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 			return controller.ExternalObservation{}, err
 		}
 
-		res, err := isCRUpdated(mg, b)
+		// scopeFields = identifiers + additionalStatusFields, consulted only when compareScope restricts drift
+		// to that set. Built as a fresh slice so appending never aliases the Resource's identifier slice.
+		scopeFields := make([]string, 0, len(clientInfo.Resource.Identifiers)+len(clientInfo.Resource.AdditionalStatusFields))
+		scopeFields = append(scopeFields, clientInfo.Resource.Identifiers...)
+		scopeFields = append(scopeFields, clientInfo.Resource.AdditionalStatusFields...)
+		res, err := isCRUpdated(mg, b, clientInfo.Resource.CompareScope, scopeFields)
 		if err != nil {
 			log.Error(err, "Checking if CR is updated")
 			return controller.ExternalObservation{}, err
