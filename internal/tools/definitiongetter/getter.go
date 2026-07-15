@@ -218,6 +218,10 @@ type Resource struct {
 	Identifiers []string `json:"identifiers"`
 	// AdditionalStatusFields: the list of additional status fields to use
 	AdditionalStatusFields []string `json:"additionalStatusFields"`
+	// CompareScope selects which fields the drift comparison considers: "" / "fullSpec" compares every spec
+	// field against the observed response; "identifiersAndStatus" compares ONLY identifiers +
+	// additionalStatusFields. Mirrors the oasgen CRD field.
+	CompareScope string `json:"compareScope,omitempty"`
 	// ConfigurationFields: the list of fields to use as configuration fields
 	ConfigurationFields []ConfigurationField `json:"configurationFields,omitempty"`
 	// VerbsDescription: the list of verbs to use on this resource
