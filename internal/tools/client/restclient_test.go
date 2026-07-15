@@ -255,6 +255,28 @@ func TestCallWithRecorder(t *testing.T) {
 			expected: nil, // 200 with empty body should return nil
 		},
 		{
+			// Regression guard for issue #27 Bug 1: the client MUST forward opts.Body on DELETE. An earlier
+			// httplib-based client sent DELETE as URL-only, so a delete operation declaring a requestBody
+			// (e.g. GitHub contents-delete needs {message, sha}) sent nothing -> 422 -> stuck finalizer.
+			name: "DELETE forwards its request body (regression: #27)",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "DELETE", r.Method)
+				assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+				var body map[string]interface{}
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				assert.Equal(t, "tear down", body["message"])
+				assert.Equal(t, "abc123", body["sha"])
+				w.WriteHeader(http.StatusOK)
+			},
+			path: "/api/test/{id}",
+			opts: &RequestConfiguration{
+				Method:     "DELETE",
+				Parameters: map[string]string{"id": "42"},
+				Body:       map[string]interface{}{"message": "tear down", "sha": "abc123"},
+			},
+			expected: nil, // 200 with empty body
+		},
+		{
 			name: "success with empty body and 201 status code",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, "POST", r.Method)
