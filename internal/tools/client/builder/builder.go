@@ -101,9 +101,15 @@ func APICallBuilder(cli restclient.UnstructuredClientInterface, info *getter.Inf
 	return nil, nil, nil
 }
 
-// BuildCallConfig builds the request configuration based on the callInfo
-// and the fields from the spec and status of the main resource, the spec of the Configuration CR and also the request field mappings.
-func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSpec map[string]interface{}) *restclient.RequestConfiguration {
+// BuildCallConfig builds the request configuration based on the callInfo and the fields from the spec and
+// status of the main resource, the spec of the Configuration CR and also the request field mappings.
+//
+// resolved carries the values already produced by fieldmapping.ResolveRequestResolvers for this same
+// callInfo.FieldMapping slice (keyed by fieldmapping.ResolverKey), for FieldMapping entries whose Resolver
+// (secretRef/apiLookup) needs network I/O this synchronous function cannot perform itself. Pass nil at
+// call sites that don't resolve resolvers (e.g. the async/observe paths) — a resolver-bearing entry is
+// then simply skipped rather than sent unresolved.
+func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSpec map[string]interface{}, resolved map[string]interface{}) *restclient.RequestConfiguration {
 	if callInfo == nil || mg == nil {
 		return nil
 	}
@@ -143,7 +149,7 @@ func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSp
 	// 2b. Apply the unified FieldMapping's request-direction entries (inPath/inQuery/inBody). Runs before
 	// spec/status auto-population (steps 3/4 below) so an explicit mapping always wins over a same-named
 	// field the resource happens to carry, matching step 2's precedence.
-	applyFieldMapping(callInfo, mg, reqConfiguration, mapBody)
+	applyFieldMapping(callInfo, mg, reqConfiguration, mapBody, resolved)
 
 	specFields, err := unstructuredtools.GetFieldsFromUnstructured(mg, "spec")
 	if err != nil {
@@ -257,23 +263,39 @@ func applyRequestFieldMapping(callInfo *CallInfo, mg *unstructured.Unstructured,
 // applyFieldMapping populates the request configuration from the unified FieldMapping's request-direction
 // entries (inPath/inQuery/inBody set; inResponse-only entries are for the response side and are ignored
 // here). It mirrors applyRequestFieldMapping's write targets and validation exactly, adding the Tier-1
-// alias value transform. Tier-2 jq and Resolver (apiLookup/secretRef) are not applied here yet: an entry
-// requesting either is skipped (left unwritten) rather than sent untransformed, matching the response
-// side's precedent of skipping an entry it cannot yet fully honor (a deferred module-ref jq program).
-func applyFieldMapping(callInfo *CallInfo, mg *unstructured.Unstructured, reqConfiguration *restclient.RequestConfiguration, mapBody map[string]interface{}) {
+// alias value transform and (when resolved is populated) Resolver (secretRef/apiLookup) values. Tier-2 jq
+// is not applied here yet: an entry requesting it is skipped (left unwritten) rather than sent
+// untransformed, matching the response side's precedent for an entry it cannot yet fully honor (a
+// deferred module-ref jq program). A Resolver entry with no matching resolved value (resolved is nil, or
+// the caller's resolve pass didn't cover this entry) is skipped the same way.
+func applyFieldMapping(callInfo *CallInfo, mg *unstructured.Unstructured, reqConfiguration *restclient.RequestConfiguration, mapBody map[string]interface{}, resolved map[string]interface{}) {
 	for _, mapping := range callInfo.FieldMapping {
 		if mapping.InPath == "" && mapping.InQuery == "" && mapping.InBody == "" {
 			continue // response-direction (inResponse) entry, handled elsewhere
 		}
 
-		pathSegments, err := pathparsing.ParsePath(mapping.InCustomResource)
-		if err != nil || len(pathSegments) == 0 {
-			continue
-		}
-
-		val, found, err := unstructured.NestedFieldNoCopy(mg.Object, pathSegments...)
-		if err != nil || !found {
-			continue
+		var val interface{}
+		if mapping.Resolver != nil {
+			v, ok := resolved[fieldmapping.ResolverKey(mapping)]
+			if !ok {
+				continue
+			}
+			val = v
+			if mapping.Resolver.Type == "secretRef" {
+				if s, ok := val.(string); ok {
+					reqConfiguration.SensitiveValues = append(reqConfiguration.SensitiveValues, s)
+				}
+			}
+		} else {
+			pathSegments, err := pathparsing.ParsePath(mapping.InCustomResource)
+			if err != nil || len(pathSegments) == 0 {
+				continue
+			}
+			v, found, err := unstructured.NestedFieldNoCopy(mg.Object, pathSegments...)
+			if err != nil || !found {
+				continue
+			}
+			val = v
 		}
 
 		if mapping.ValueMapping != nil {
@@ -354,7 +376,7 @@ func IsResourceKnown(cli restclient.UnstructuredClientInterface, clientInfo *get
 		return false
 	}
 
-	reqConfiguration := BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec)
+	reqConfiguration := BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec, nil)
 	if reqConfiguration == nil {
 		return false
 	}

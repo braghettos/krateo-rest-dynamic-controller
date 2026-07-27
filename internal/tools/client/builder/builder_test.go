@@ -11,6 +11,7 @@ import (
 	restclient "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client"
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client/apiaction"
 	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/fieldmapping"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -490,7 +491,7 @@ func TestBuildCallConfig(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			config := BuildCallConfig(tc.callInfo, tc.mg, tc.configSpec)
+			config := BuildCallConfig(tc.callInfo, tc.mg, tc.configSpec, nil)
 
 			if tc.expectNil {
 				assert.Nil(t, config)
@@ -573,7 +574,7 @@ func TestBuildCallConfig_WithMerge(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			config := BuildCallConfig(tc.callInfo, tc.mg, tc.configSpec)
+			config := BuildCallConfig(tc.callInfo, tc.mg, tc.configSpec, nil)
 
 			assert.NotNil(t, config, "config should not be nil")
 			assert.Equal(t, tc.expectedQuery, config.Query)
@@ -1352,7 +1353,7 @@ func TestApplyFieldMapping(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			applyFieldMapping(tc.callInfo, tc.mg, tc.initialReqConfig, tc.initialMapBody)
+			applyFieldMapping(tc.callInfo, tc.mg, tc.initialReqConfig, tc.initialMapBody, nil)
 
 			if diff := cmp.Diff(tc.expectedReqConfig.Parameters, tc.initialReqConfig.Parameters); diff != "" {
 				t.Errorf("mismatch in parameters (-want +got):\n%s", diff)
@@ -1364,6 +1365,74 @@ func TestApplyFieldMapping(t *testing.T) {
 				t.Errorf("mismatch in body (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// TestApplyFieldMapping_ResolverUsesResolvedValue proves a Resolver-bearing entry never reads
+// InCustomResource off mg directly: its value comes entirely from the resolved map, keyed by
+// fieldmapping.ResolverKey.
+func TestApplyFieldMapping_ResolverUsesResolvedValue(t *testing.T) {
+	mapping := getter.FieldMappingItem{
+		InBody:           "token",
+		InCustomResource: "spec.credentialsRef",
+		Resolver: &getter.FieldResolver{
+			Type: "secretRef",
+			SecretRef: &getter.SecretRefResolver{
+				NameFromCustomResource: "spec.credentialsRef.name",
+				KeyFromCustomResource:  "spec.credentialsRef.key",
+			},
+		},
+	}
+	callInfo := &CallInfo{FieldMapping: []getter.FieldMappingItem{mapping}}
+	mg := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"credentialsRef": map[string]interface{}{"name": "db-creds", "key": "password"},
+			},
+		},
+	}
+	resolved := map[string]interface{}{
+		fieldmapping.ResolverKey(mapping): "hunter2",
+	}
+	reqConfig := &restclient.RequestConfiguration{Parameters: map[string]string{}, Query: map[string]string{}}
+	mapBody := map[string]interface{}{}
+
+	applyFieldMapping(callInfo, mg, reqConfig, mapBody, resolved)
+
+	if mapBody["token"] != "hunter2" {
+		t.Fatalf("expected resolved value %q in body, got %v", "hunter2", mapBody["token"])
+	}
+	if len(reqConfig.SensitiveValues) != 1 || reqConfig.SensitiveValues[0] != "hunter2" {
+		t.Fatalf("expected the resolved secretRef value to be recorded as sensitive, got %v", reqConfig.SensitiveValues)
+	}
+}
+
+// TestApplyFieldMapping_ResolverMissingFromResolvedIsSkipped proves a Resolver entry with no matching
+// entry in resolved is skipped (left unwritten), not sent with a zero-value/nil placeholder.
+func TestApplyFieldMapping_ResolverMissingFromResolvedIsSkipped(t *testing.T) {
+	mapping := getter.FieldMappingItem{
+		InBody:           "token",
+		InCustomResource: "spec.credentialsRef",
+		Resolver: &getter.FieldResolver{
+			Type: "secretRef",
+			SecretRef: &getter.SecretRefResolver{
+				NameFromCustomResource: "spec.credentialsRef.name",
+				KeyFromCustomResource:  "spec.credentialsRef.key",
+			},
+		},
+	}
+	callInfo := &CallInfo{FieldMapping: []getter.FieldMappingItem{mapping}}
+	mg := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{}}}
+	reqConfig := &restclient.RequestConfiguration{Parameters: map[string]string{}, Query: map[string]string{}}
+	mapBody := map[string]interface{}{}
+
+	applyFieldMapping(callInfo, mg, reqConfig, mapBody, nil)
+
+	if _, ok := mapBody["token"]; ok {
+		t.Fatalf("expected an unresolved resolver entry to be skipped, got body %v", mapBody)
+	}
+	if len(reqConfig.SensitiveValues) != 0 {
+		t.Fatalf("expected no sensitive values recorded, got %v", reqConfig.SensitiveValues)
 	}
 }
 
@@ -1391,7 +1460,7 @@ func TestBuildCallConfig_FieldMappingPrecedesAutoPopulation(t *testing.T) {
 		},
 	}
 
-	got := BuildCallConfig(ci, mg, nil)
+	got := BuildCallConfig(ci, mg, nil, nil)
 
 	if got.Parameters["id"] != "explicit-id" {
 		t.Fatalf("expected the explicit FieldMapping entry to win, got %q", got.Parameters["id"])
@@ -1407,7 +1476,7 @@ func TestBuildCallConfig_SuccessCodesPropagated(t *testing.T) {
 	}
 	mg := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{}, "status": map[string]interface{}{}}}
 
-	rc := BuildCallConfig(ci, mg, nil)
+	rc := BuildCallConfig(ci, mg, nil, nil)
 	if assert.NotNil(t, rc) {
 		assert.Equal(t, []int{201, 202}, rc.SuccessCodes, "per-verb successCodes must reach the request configuration")
 	}
@@ -1425,7 +1494,7 @@ func TestBuildCallConfig_HeadersInjected(t *testing.T) {
 	}
 	mg := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{}, "status": map[string]interface{}{}}}
 
-	rc := BuildCallConfig(ci, mg, nil)
+	rc := BuildCallConfig(ci, mg, nil, nil)
 	if assert.NotNil(t, rc) {
 		assert.Equal(t, "application/vnd.github.v3.repository+json", rc.Headers["Accept"])
 		assert.Equal(t, "application/json", rc.Headers["Content-Type"])
@@ -1441,7 +1510,7 @@ func TestBuildCallConfig_QueriesInjected(t *testing.T) {
 	}
 	mg := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{}, "status": map[string]interface{}{}}}
 
-	rc := BuildCallConfig(ci, mg, nil)
+	rc := BuildCallConfig(ci, mg, nil, nil)
 	if assert.NotNil(t, rc) {
 		assert.Equal(t, "7.2-preview.7", rc.Query["api-version"], "per-verb static query must reach the request configuration")
 	}

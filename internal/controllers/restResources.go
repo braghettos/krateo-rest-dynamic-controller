@@ -193,7 +193,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 			log.Error(err, "Building API call")
 			return controller.ExternalObservation{}, err
 		}
-		reqConfiguration := builder.BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec)
+		reqConfiguration := builder.BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec, nil)
 		if reqConfiguration == nil {
 			return controller.ExternalObservation{}, fmt.Errorf("error building call configuration")
 		}
@@ -258,7 +258,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 			log.Error(err, "Building API call")
 			return controller.ExternalObservation{}, err
 		}
-		reqConfiguration := builder.BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec)
+		reqConfiguration := builder.BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec, nil)
 		if reqConfiguration == nil {
 			log.Error(fmt.Errorf("error building call configuration"), "Building call configuration")
 			return controller.ExternalObservation{}, fmt.Errorf("error building call configuration")
@@ -470,7 +470,15 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 		log.Error(fmt.Errorf("API action create not found"), "action", apiaction.Create)
 		return nil
 	}
-	reqConfiguration := builder.BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec)
+
+	// First provisioning: a missing secretRef RBAC Role is normal here (expectExisting=false).
+	resolved, err := h.ensureSecretRefRBACAndResolve(ctx, clientInfo, callInfo.FieldMapping, mg, false)
+	if err != nil {
+		log.Error(err, "Provisioning secretRef RBAC / resolving field mapping resolvers")
+		return err
+	}
+
+	reqConfiguration := builder.BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec, resolved)
 	response, err := apiCall(ctx, &http.Client{}, callInfo.Path, reqConfiguration)
 	if err != nil {
 		log.Error(err, "Performing REST call")
@@ -619,7 +627,15 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 		return nil
 	}
 
-	reqConfiguration := builder.BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec)
+	// The Role should already exist from Create (expectExisting=true): if it's unexpectedly missing, that's
+	// a hard error (decision D), not a silent recreate. Full replace of the granted secret-name set.
+	resolved, err := h.ensureSecretRefRBACAndResolve(ctx, clientInfo, callInfo.FieldMapping, mg, true)
+	if err != nil {
+		log.Error(err, "Refreshing secretRef RBAC / resolving field mapping resolvers")
+		return err
+	}
+
+	reqConfiguration := builder.BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec, resolved)
 	response, err := apiCall(ctx, &http.Client{}, callInfo.Path, reqConfiguration)
 	if err != nil {
 		log.Error(err, "Performing REST call")
@@ -738,6 +754,11 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 			log.Error(err, "Setting condition")
 			return err
 		}
+		// Teardown of RDC's own self-granted secretRef RBAC never depends on the RestDefinition existing.
+		// Best-effort: a failure here must not block releasing the CR's finalizer.
+		if derr := h.deleteSecretRefRBAC(ctx, mg); derr != nil {
+			log.Warn("secretRef RBAC teardown failed, continuing", "error", derr)
+		}
 		return nil
 	}
 
@@ -774,6 +795,9 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		if err := unstructuredtools.SetConditions(mg, condition.Deleting()); err != nil {
 			log.Warn("Setting condition", "error", err)
 		}
+		if derr := h.deleteSecretRefRBAC(ctx, mg); derr != nil {
+			log.Warn("secretRef RBAC teardown failed, continuing", "error", derr)
+		}
 		return nil
 	}
 
@@ -784,6 +808,9 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		err = unstructuredtools.SetConditions(mg, condition.Deleting())
 		if err != nil {
 			log.Warn("Setting condition", "error", err)
+		}
+		if derr := h.deleteSecretRefRBAC(ctx, mg); derr != nil {
+			log.Warn("secretRef RBAC teardown failed, continuing", "error", derr)
 		}
 		return nil
 	}
@@ -798,9 +825,21 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 	if apiCall == nil || callInfo == nil {
 		log.Error(fmt.Errorf("API action delete not found"), "action", apiaction.Delete)
+		if derr := h.deleteSecretRefRBAC(ctx, mg); derr != nil {
+			log.Warn("secretRef RBAC teardown failed, continuing", "error", derr)
+		}
 		return nil
 	}
-	reqConfiguration := builder.BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec)
+
+	// expectExisting=false: the Role may or may not exist yet (e.g. a CR deleted without ever having gone
+	// through Update), and either way EnsureSecretRole's create-or-update is correct here.
+	resolved, err := h.ensureSecretRefRBACAndResolve(ctx, clientInfo, callInfo.FieldMapping, mg, false)
+	if err != nil {
+		log.Error(err, "Provisioning secretRef RBAC / resolving field mapping resolvers")
+		return err
+	}
+
+	reqConfiguration := builder.BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec, resolved)
 	if reqConfiguration == nil {
 		log.Error(fmt.Errorf("error building call configuration"), "Building call configuration")
 		return fmt.Errorf("building call configuration")
@@ -832,5 +871,8 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 
 	h.eventRecorder.Event(mg, event.Normal(reasonDeleted, "Delete", fmt.Sprintf("Deleted external resource: %s", mg.GetName())))
+	if derr := h.deleteSecretRefRBAC(ctx, mg); derr != nil {
+		log.Warn("secretRef RBAC teardown failed, continuing", "error", derr)
+	}
 	return nil
 }

@@ -71,7 +71,7 @@ func (h *handler) externalResourceStillExists(ctx context.Context, cli restclien
 		log.Debug("No get verb to verify deletion; trusting the delete RESTAction result")
 		return false, nil
 	}
-	getReq := builder.BuildCallConfig(getInfo, mg, clientInfo.ConfigurationSpec)
+	getReq := builder.BuildCallConfig(getInfo, mg, clientInfo.ConfigurationSpec, nil)
 	if getReq == nil {
 		return false, nil
 	}

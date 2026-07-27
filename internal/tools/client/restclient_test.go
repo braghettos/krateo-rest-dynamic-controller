@@ -1,6 +1,7 @@
 package restclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/pb33f/libopenapi"
@@ -1317,4 +1319,60 @@ func TestCall_NotFoundCodes(t *testing.T) {
 		require.Error(t, err)
 		assert.False(t, IsNotFoundError(err), "without notFoundCodes a 410 is not a not-found")
 	})
+}
+
+func TestRedact(t *testing.T) {
+	t.Run("replaces every occurrence of every value", func(t *testing.T) {
+		in := []byte(`Authorization: Bearer hunter2\nbody: {"token":"hunter2","other":"fine"}`)
+		out := redact(in, []string{"hunter2"})
+		assert.NotContains(t, string(out), "hunter2")
+		assert.Contains(t, string(out), "***REDACTED***")
+		assert.Contains(t, string(out), "fine")
+	})
+
+	t.Run("empty values are ignored, not treated as a match-everything wildcard", func(t *testing.T) {
+		in := []byte(`some request bytes`)
+		out := redact(in, []string{""})
+		assert.Equal(t, in, out)
+	})
+
+	t.Run("no values is a no-op", func(t *testing.T) {
+		in := []byte(`some request bytes`)
+		out := redact(in, nil)
+		assert.Equal(t, in, out)
+	})
+
+	t.Run("multiple distinct values are all redacted", func(t *testing.T) {
+		in := []byte(`secret-one and secret-two both present`)
+		out := redact(in, []string{"secret-one", "secret-two"})
+		assert.NotContains(t, string(out), "secret-one")
+		assert.NotContains(t, string(out), "secret-two")
+	})
+}
+
+// TestDebuggingRoundTripper_RedactsSensitiveValues proves the debug transport actually applies
+// RedactValues to the dumped request before writing it out, closing the leak path a secretRef-resolved
+// value would otherwise take through verbose/debug logging.
+func TestDebuggingRoundTripper_RedactsSensitiveValues(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	rt := &debuggingRoundTripper{
+		Transport:    http.DefaultTransport,
+		Out:          &out,
+		RedactValues: []string{"hunter2"},
+	}
+	cli := &http.Client{Transport: rt}
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/test", strings.NewReader(`{"token":"hunter2"}`))
+	require.NoError(t, err)
+
+	_, err = cli.Do(req)
+	require.NoError(t, err)
+
+	assert.NotContains(t, out.String(), "hunter2")
+	assert.Contains(t, out.String(), "***REDACTED***")
 }

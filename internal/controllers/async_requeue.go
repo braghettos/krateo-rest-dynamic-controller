@@ -144,7 +144,7 @@ func pollBaseFromRecord(cli restclient.UnstructuredClientInterface, clientInfo *
 		}
 	}
 	if getCall, getInfo, gerr := builder.APICallBuilder(cli, clientInfo, apiaction.Get); gerr == nil && getCall != nil && getInfo != nil {
-		return builder.BuildCallConfig(getInfo, mg, clientInfo.ConfigurationSpec)
+		return builder.BuildCallConfig(getInfo, mg, clientInfo.ConfigurationSpec, nil)
 	}
 	return nil
 }
@@ -178,7 +178,7 @@ func (h *handler) reReadStatusOnAsyncSuccess(ctx context.Context, cli restclient
 	if gerr != nil || getCall == nil || getInfo == nil {
 		return nil
 	}
-	getReq := builder.BuildCallConfig(getInfo, mg, clientInfo.ConfigurationSpec)
+	getReq := builder.BuildCallConfig(getInfo, mg, clientInfo.ConfigurationSpec, nil)
 	resp, err := getCall(ctx, &http.Client{Timeout: async.RequestTimeout}, getInfo.Path, getReq)
 	if err != nil {
 		return err

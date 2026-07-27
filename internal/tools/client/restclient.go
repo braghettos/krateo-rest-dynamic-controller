@@ -116,9 +116,10 @@ func (u *UnstructuredClient) Call(ctx context.Context, cli *http.Client, path st
 
 	if u.Debug {
 		cli.Transport = &debuggingRoundTripper{
-			Transport:  cli.Transport,
-			Out:        os.Stdout,
-			PrettyJSON: u.PrettyJSON,
+			Transport:    cli.Transport,
+			Out:          os.Stdout,
+			PrettyJSON:   u.PrettyJSON,
+			RedactValues: opts.SensitiveValues,
 		}
 	}
 	// Wrap the (possibly debug) transport with otelhttp so outbound calls to the
@@ -259,9 +260,10 @@ func (u *UnstructuredClient) FindBy(ctx context.Context, cli *http.Client, path 
 	if u.Debug {
 		if _, ok := cli.Transport.(*debuggingRoundTripper); !ok {
 			cli.Transport = &debuggingRoundTripper{
-				Transport:  cli.Transport,
-				Out:        os.Stdout,
-				PrettyJSON: u.PrettyJSON,
+				Transport:    cli.Transport,
+				Out:          os.Stdout,
+				PrettyJSON:   u.PrettyJSON,
+				RedactValues: opts.SensitiveValues,
 			}
 		}
 	}
@@ -718,6 +720,9 @@ type debuggingRoundTripper struct {
 	Transport  http.RoundTripper
 	Out        io.Writer
 	PrettyJSON bool
+	// RedactValues are resolved sensitive values (e.g. a secretRef-resolved secret) that must never reach
+	// Out in cleartext. Every occurrence in the dumped request is replaced before writing.
+	RedactValues []string
 }
 
 func (d *debuggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -725,6 +730,7 @@ func (d *debuggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 	if err != nil {
 		return nil, err
 	}
+	b = redact(b, d.RedactValues)
 
 	d.Out.Write(b)
 	d.Out.Write([]byte{'\n'})
@@ -754,6 +760,19 @@ func (d *debuggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 	}
 
 	return resp, nil
+}
+
+// redact replaces every occurrence of each non-empty value in values with a fixed-width placeholder, so a
+// redacted dump never leaks the original length. Used to keep secretRef-resolved values out of
+// verbose/debug request dumps even though they are legitimately sent to the external API.
+func redact(b []byte, values []string) []byte {
+	for _, v := range values {
+		if v == "" {
+			continue
+		}
+		b = bytes.ReplaceAll(b, []byte(v), []byte("***REDACTED***"))
+	}
+	return b
 }
 
 // dumpResponseWithPrettyJSON dumps the HTTP response with pretty-printed JSON body if applicable

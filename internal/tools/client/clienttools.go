@@ -110,6 +110,10 @@ type RequestConfiguration struct {
 	TolerateCodes []int
 	// NotFoundCodes are HTTP status codes remapped to a not-found result (StatusError 404).
 	NotFoundCodes []int
+	// SensitiveValues are resolved values (e.g. a secretRef-resolved secret) that must never appear in
+	// verbose/debug request-dump output, even though they are sent to the external API. Call/FindBy redact
+	// every occurrence of these strings before writing a debug dump.
+	SensitiveValues []string
 }
 
 // isInResource is a method used during a "FindBy" operation.
