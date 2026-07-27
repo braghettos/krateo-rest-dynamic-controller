@@ -19,12 +19,21 @@ func ResolverKey(m getter.FieldMappingItem) string {
 	return m.InPath + "\x00" + m.InQuery + "\x00" + m.InBody + "\x00" + m.InCustomResource
 }
 
+// APILookupFunc resolves an apiLookup Resolver against an alias value already read from the CR. It is
+// injected by the caller (internal/controllers) rather than called directly from this package: apiLookup
+// needs builder.APICallBuilder and a restclient.UnstructuredClientInterface, and fieldmapping cannot
+// import builder without an import cycle (builder already imports fieldmapping, for ApplyAlias). A nil
+// APILookupFunc means the caller does not support apiLookup at this call site; an apiLookup entry then
+// fails with a clear error rather than silently sending the request without its value.
+type APILookupFunc func(ctx context.Context, r *getter.APILookupResolver, aliasValue interface{}) (interface{}, error)
+
 // ResolveRequestResolvers resolves every request-direction FieldMapping entry's Resolver against the
 // given CR instance, returning a map from ResolverKey to the resolved value. Entries without a Resolver
-// are absent from the result. Only secretRef is implemented; any other resolver type is a hard error (an
-// apiLookup entry reaching here before that resolver exists must not silently be skipped, since that
-// would send the request without the value it was supposed to carry).
-func ResolveRequestResolvers(ctx context.Context, dyn dynamic.Interface, mapping []getter.FieldMappingItem, mg *unstructured.Unstructured) (map[string]interface{}, error) {
+// are absent from the result. secretRef is resolved directly; apiLookup is delegated to lookupFn. Any
+// other resolver type, or an apiLookup entry when lookupFn is nil, is a hard error — an unresolvable entry
+// must never be silently skipped here, since that would send the request without the value it was
+// supposed to carry.
+func ResolveRequestResolvers(ctx context.Context, dyn dynamic.Interface, mapping []getter.FieldMappingItem, mg *unstructured.Unstructured, lookupFn APILookupFunc) (map[string]interface{}, error) {
 	if len(mapping) == 0 {
 		return nil, nil
 	}
@@ -43,8 +52,21 @@ func ResolveRequestResolvers(ctx context.Context, dyn dynamic.Interface, mapping
 				return nil, fmt.Errorf("resolving secretRef for field %q: %w", m.InCustomResource, err)
 			}
 			out[ResolverKey(m)] = val
+		case "apiLookup":
+			if lookupFn == nil {
+				return nil, fmt.Errorf("apiLookup resolver requested but not supported at this call site (field %q)", m.InCustomResource)
+			}
+			aliasVal, err := readAnyPath(mg, m.InCustomResource)
+			if err != nil {
+				return nil, fmt.Errorf("reading apiLookup alias for field %q: %w", m.InCustomResource, err)
+			}
+			val, err := lookupFn(ctx, m.Resolver.ApiLookup, aliasVal)
+			if err != nil {
+				return nil, fmt.Errorf("resolving apiLookup for field %q: %w", m.InCustomResource, err)
+			}
+			out[ResolverKey(m)] = val
 		default:
-			return nil, fmt.Errorf("resolver type %q is not supported yet (field %q)", m.Resolver.Type, m.InCustomResource)
+			return nil, fmt.Errorf("resolver type %q is not supported (field %q)", m.Resolver.Type, m.InCustomResource)
 		}
 	}
 	return out, nil
@@ -95,6 +117,20 @@ func resolveSecretRef(ctx context.Context, dyn dynamic.Interface, r *getter.Secr
 	// The Secret is always read from the CR instance's own namespace: SecretRefResolver has no namespace
 	// field, foreclosing a cross-namespace reference at the type level rather than a runtime check.
 	return secretref.GetSecretValue(ctx, dyn, mg.GetNamespace(), name, key)
+}
+
+// readAnyPath reads the raw value at path, whatever its JSON type (an apiLookup alias need not be a
+// string — e.g. a numeric id used to look up another numeric id).
+func readAnyPath(mg *unstructured.Unstructured, path string) (interface{}, error) {
+	segments, err := pathparsing.ParsePath(path)
+	if err != nil || len(segments) == 0 {
+		return nil, fmt.Errorf("invalid path %q", path)
+	}
+	val, found, err := unstructured.NestedFieldNoCopy(mg.Object, segments...)
+	if err != nil || !found {
+		return nil, fmt.Errorf("path %q not found on the custom resource", path)
+	}
+	return val, nil
 }
 
 func readStringPath(mg *unstructured.Unstructured, path string) (string, error) {

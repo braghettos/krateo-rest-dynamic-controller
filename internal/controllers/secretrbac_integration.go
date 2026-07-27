@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	restclient "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client"
+	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client/builder"
 	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/fieldmapping"
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/secretrbac"
@@ -21,7 +23,7 @@ import (
 //
 // expectExisting is false on Create (first provisioning; a missing Role is normal) and true on Update (the
 // Role should already exist from Create; if it doesn't, that is a hard error — see secretrbac.EnsureSecretRole).
-func (h *handler) ensureSecretRefRBACAndResolve(ctx context.Context, clientInfo *getter.Info, mapping []getter.FieldMappingItem, mg *unstructured.Unstructured, expectExisting bool) (map[string]interface{}, error) {
+func (h *handler) ensureSecretRefRBACAndResolve(ctx context.Context, cli restclient.UnstructuredClientInterface, clientInfo *getter.Info, mapping []getter.FieldMappingItem, mg *unstructured.Unstructured, expectExisting bool) (map[string]interface{}, error) {
 	if secretNames := fieldmapping.CollectSecretRefNames(clientInfo.Resource.VerbsDescription, mg); len(secretNames) > 0 {
 		gvr, err := h.pluralizer.GVKtoGVR(mg.GroupVersionKind())
 		if err != nil {
@@ -33,7 +35,10 @@ func (h *handler) ensureSecretRefRBACAndResolve(ctx context.Context, clientInfo 
 		}
 	}
 
-	resolved, err := fieldmapping.ResolveRequestResolvers(ctx, h.dynamicClient, mapping, mg)
+	lookupFn := func(ctx context.Context, r *getter.APILookupResolver, aliasValue interface{}) (interface{}, error) {
+		return builder.ResolveAPILookup(ctx, cli, clientInfo, r, aliasValue)
+	}
+	resolved, err := fieldmapping.ResolveRequestResolvers(ctx, h.dynamicClient, mapping, mg, lookupFn)
 	if err != nil {
 		return nil, fmt.Errorf("resolving field mapping resolvers: %w", err)
 	}

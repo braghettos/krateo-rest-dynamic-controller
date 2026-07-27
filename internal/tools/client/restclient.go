@@ -288,7 +288,7 @@ func (u *UnstructuredClient) FindBy(ctx context.Context, cli *http.Client, path 
 		}
 
 		// Normalize the response to a list of items.
-		itemList, err := u.extractItemsFromResponse(response.ResponseBody)
+		itemList, err := ExtractItemsFromResponse(response.ResponseBody)
 		if err != nil {
 			// If extraction fails, we can't continue.
 			return Response{}, err
@@ -336,7 +336,7 @@ func (u *UnstructuredClient) CallFindBySingle(ctx context.Context, cli *http.Cli
 	}
 
 	// Extract the list of items from the response.
-	itemList, err := u.extractItemsFromResponse(response.ResponseBody)
+	itemList, err := ExtractItemsFromResponse(response.ResponseBody)
 	if err != nil {
 		return Response{}, err
 	}
@@ -525,12 +525,16 @@ func (u *UnstructuredClient) CallForPagination(ctx context.Context, cli *http.Cl
 	}, resp, nil
 }
 
-// extractItemsFromResponse parses the body of an API response and extracts a list of items.
+// ExtractItemsFromResponse parses the body of an API response and extracts a list of items.
 // It is designed to handle three common API response patterns for list operations:
 // 1. A standard JSON array: `[{"id": 1}, {"id": 2}]`. Note: we take the first array we find in the object as we don't know the property name in advance.
 // 2. An object wrapping the array: `{"items": [{"id": 1}, {"id": 2}]}`
 // 3. A single object, for endpoints that don't use an array for single-item results: `{"id": 1}` (e.g. when the collection only has one item at the moment)
-func (u *UnstructuredClient) extractItemsFromResponse(body interface{}) ([]interface{}, error) {
+//
+// It is a free function (not a method) because it does not depend on any UnstructuredClient state — this
+// lets other packages (e.g. builder's apiLookup resolver) reuse the same list-normalization logic FindBy
+// uses, without needing a client instance.
+func ExtractItemsFromResponse(body interface{}) ([]interface{}, error) {
 	// Case 1: The body is already a standard list (JSON array).
 	if list, ok := body.([]interface{}); ok {
 		return list, nil

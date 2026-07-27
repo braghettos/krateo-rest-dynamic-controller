@@ -911,7 +911,6 @@ func TestResponse_IsPending(t *testing.T) {
 }
 
 func TestExtractItemsFromResponse(t *testing.T) {
-	client := &UnstructuredClient{}
 	singleItem := map[string]interface{}{"id": 1}
 	tests := []struct {
 		name    string
@@ -958,12 +957,12 @@ func TestExtractItemsFromResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := client.extractItemsFromResponse(tt.body)
+			got, err := ExtractItemsFromResponse(tt.body)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("extractItemsFromResponse() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ExtractItemsFromResponse() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			assert.Equal(t, tt.want, got, "extractItemsFromResponse() got = %v, want %v", got, tt.want)
+			assert.Equal(t, tt.want, got, "ExtractItemsFromResponse() got = %v, want %v", got, tt.want)
 		})
 	}
 }

@@ -472,7 +472,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 
 	// First provisioning: a missing secretRef RBAC Role is normal here (expectExisting=false).
-	resolved, err := h.ensureSecretRefRBACAndResolve(ctx, clientInfo, callInfo.FieldMapping, mg, false)
+	resolved, err := h.ensureSecretRefRBACAndResolve(ctx, cli, clientInfo, callInfo.FieldMapping, mg, false)
 	if err != nil {
 		log.Error(err, "Provisioning secretRef RBAC / resolving field mapping resolvers")
 		return err
@@ -629,7 +629,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 
 	// The Role should already exist from Create (expectExisting=true): if it's unexpectedly missing, that's
 	// a hard error (decision D), not a silent recreate. Full replace of the granted secret-name set.
-	resolved, err := h.ensureSecretRefRBACAndResolve(ctx, clientInfo, callInfo.FieldMapping, mg, true)
+	resolved, err := h.ensureSecretRefRBACAndResolve(ctx, cli, clientInfo, callInfo.FieldMapping, mg, true)
 	if err != nil {
 		log.Error(err, "Refreshing secretRef RBAC / resolving field mapping resolvers")
 		return err
@@ -833,7 +833,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 
 	// expectExisting=false: the Role may or may not exist yet (e.g. a CR deleted without ever having gone
 	// through Update), and either way EnsureSecretRole's create-or-update is correct here.
-	resolved, err := h.ensureSecretRefRBACAndResolve(ctx, clientInfo, callInfo.FieldMapping, mg, false)
+	resolved, err := h.ensureSecretRefRBACAndResolve(ctx, cli, clientInfo, callInfo.FieldMapping, mg, false)
 	if err != nil {
 		log.Error(err, "Provisioning secretRef RBAC / resolving field mapping resolvers")
 		return err
