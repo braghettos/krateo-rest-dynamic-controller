@@ -28,6 +28,7 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/workqueue"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -61,6 +62,12 @@ func main() {
 	saTokenPath := flag.String("serviceaccount-token-path",
 		env.String("REST_CONTROLLER_SERVICEACCOUNT_TOKEN_PATH", authn.DefaultTokenPath),
 		"path to the projected (authn-audience) ServiceAccount token used to authenticate to authn")
+	selfSAName := flag.String("serviceaccount-name",
+		env.String("REST_CONTROLLER_SERVICEACCOUNT_NAME", ""),
+		"name of this controller's own ServiceAccount, used as the RoleBinding subject when self-provisioning secretRef RBAC (required)")
+	selfSANamespace := flag.String("serviceaccount-namespace",
+		env.String("REST_CONTROLLER_SERVICEACCOUNT_NAMESPACE", ""),
+		"namespace of this controller's own ServiceAccount (required)")
 	workers := flag.Int("workers",
 		env.Int("REST_CONTROLLER_WORKERS", 5),
 		"number of workers")
@@ -114,6 +121,16 @@ func main() {
 	}
 
 	flag.Parse()
+
+	// Hard dependency, checked before anything else starts: RDC self-provisions secretRef RBAC scoped to
+	// its own ServiceAccount (issue #31), and has no way to discover that identity on its own. A
+	// version-skew deployment (an oasgen-provider still emitting only the legacy
+	// COMPOSITION_CONTROLLER_SA_* ConfigMap keys) must fail loud and total here, not run in a degraded
+	// state where secretRef silently can never work.
+	if *selfSAName == "" || *selfSANamespace == "" {
+		fmt.Fprintln(os.Stderr, "serviceaccount-name and serviceaccount-namespace (or REST_CONTROLLER_SERVICEACCOUNT_NAME/_NAMESPACE) are required and must both be set")
+		os.Exit(1)
+	}
 
 	logLevel := slog.LevelInfo
 	if *debug {
@@ -239,6 +256,15 @@ func main() {
 		SetEventRecorder(event.Recorder)
 	}); ok {
 		h.SetEventRecorder(apiRecorder)
+	}
+
+	// Self ServiceAccount identity for secretRef RBAC self-provisioning (issue #31): the RoleBinding
+	// subject naming exactly which controller instance may read a CR instance's referenced Secrets.
+	// Both fields are validated non-empty above, before anything else in this function ran.
+	if h, ok := handler.(interface {
+		SetSelfServiceAccount(types.NamespacedName)
+	}); ok {
+		h.SetSelfServiceAccount(types.NamespacedName{Name: *selfSAName, Namespace: *selfSANamespace})
 	}
 
 	// Wire the snowplow client used to resolve observeApiRef RESTActions under the controller's own authn

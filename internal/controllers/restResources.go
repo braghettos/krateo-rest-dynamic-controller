@@ -22,6 +22,7 @@ import (
 	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured/condition"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
@@ -78,6 +79,10 @@ type handler struct {
 	// snowplowClient resolves observeApiRef RESTActions via snowplow's /call endpoint. nil when snowplow is
 	// not configured; a resource that declares observeApiRef then fails Observe with a clear error.
 	snowplowClient *snowplow.Client
+	// selfServiceAccount is this controller's own identity, used as the RoleBinding subject when
+	// self-provisioning secretRef RBAC (issue #31). main.go hard-fails at startup if it is unset, so by
+	// the time Create/Update/Delete run it is always populated.
+	selfServiceAccount types.NamespacedName
 }
 
 // SetEventRecorder wires a Kubernetes Event recorder used to emit Events on the
@@ -94,6 +99,12 @@ func (h *handler) SetSnowplowClient(c *snowplow.Client) {
 	if c != nil {
 		h.snowplowClient = c
 	}
+}
+
+// SetSelfServiceAccount records this controller's own ServiceAccount identity, used as the RoleBinding
+// subject when self-provisioning secretRef RBAC (issue #31).
+func (h *handler) SetSelfServiceAccount(sa types.NamespacedName) {
+	h.selfServiceAccount = sa
 }
 
 func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (controller.ExternalObservation, error) {
