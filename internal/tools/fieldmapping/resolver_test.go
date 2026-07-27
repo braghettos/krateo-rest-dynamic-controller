@@ -287,6 +287,132 @@ func TestResolverKey_StableAndDistinct(t *testing.T) {
 	}
 }
 
+// TestResolveRequestResolvers_SecretRefDedupedAcrossEntries proves two FieldMapping entries referencing
+// the SAME secret trigger exactly one Secret read, not one per entry.
+func TestResolveRequestResolvers_SecretRefDedupedAcrossEntries(t *testing.T) {
+	dyn := newFakeClientWithSecret(t, "ns1", "db-creds", "password", "hunter2")
+	mg := mgWithCredsRef("ns1", "db-creds", "password")
+
+	sameResolver := &getter.FieldResolver{
+		Type: "secretRef",
+		SecretRef: &getter.SecretRefResolver{
+			NameFromCustomResource: "spec.credentialsRef.name",
+			KeyFromCustomResource:  "spec.credentialsRef.key",
+		},
+	}
+	mapping := []getter.FieldMappingItem{
+		{InBody: "token", InCustomResource: "spec.credentialsRef", Resolver: sameResolver},
+		{InQuery: "auth", InCustomResource: "spec.credentialsRef", Resolver: sameResolver},
+	}
+
+	dyn.Fake.ClearActions()
+	resolved, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg, nil)
+	if err != nil {
+		t.Fatalf("ResolveRequestResolvers: %v", err)
+	}
+
+	if resolved[ResolverKey(mapping[0])] != "hunter2" || resolved[ResolverKey(mapping[1])] != "hunter2" {
+		t.Fatalf("expected both entries to resolve to the same value, got %v", resolved)
+	}
+
+	gets := 0
+	for _, a := range dyn.Fake.Actions() {
+		if a.GetVerb() == "get" && a.GetResource().Resource == "secrets" {
+			gets++
+		}
+	}
+	if gets != 1 {
+		t.Fatalf("expected exactly one secret Get despite two referencing entries, got %d", gets)
+	}
+}
+
+// TestResolveRequestResolvers_ApiLookupDedupedAcrossEntries proves two FieldMapping entries resolving the
+// same action+requestParam+alias trigger exactly one lookupFn call, not one per entry.
+func TestResolveRequestResolvers_ApiLookupDedupedAcrossEntries(t *testing.T) {
+	mg := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{"alias": "my-team-slug"}}}
+
+	sameResolver := &getter.FieldResolver{
+		Type: "apiLookup",
+		ApiLookup: &getter.APILookupResolver{
+			Action: "findby", RequestParam: "slug", ResponsePath: "id",
+		},
+	}
+	mapping := []getter.FieldMappingItem{
+		{InPath: "id", InCustomResource: "spec.alias", Resolver: sameResolver},
+		{InBody: "teamId", InCustomResource: "spec.alias", Resolver: sameResolver},
+	}
+
+	calls := 0
+	lookupFn := func(ctx context.Context, r *getter.APILookupResolver, aliasValue interface{}) (interface{}, error) {
+		calls++
+		return "resolved-id-123", nil
+	}
+
+	resolved, err := ResolveRequestResolvers(context.Background(), nil, mapping, mg, lookupFn)
+	if err != nil {
+		t.Fatalf("ResolveRequestResolvers: %v", err)
+	}
+	if resolved[ResolverKey(mapping[0])] != "resolved-id-123" || resolved[ResolverKey(mapping[1])] != "resolved-id-123" {
+		t.Fatalf("expected both entries to resolve to the same value, got %v", resolved)
+	}
+	if calls != 1 {
+		t.Fatalf("expected exactly one lookupFn call despite two referencing entries, got %d", calls)
+	}
+}
+
+// TestResolveRequestResolvers_DistinctSecretsNotDeduped proves the cache is content-keyed, not blanket
+// dedup: two entries referencing DIFFERENT secrets each still get their own value.
+func TestResolveRequestResolvers_DistinctSecretsNotDeduped(t *testing.T) {
+	dyn := newFakeClientWithSecret(t, "ns1", "db-creds", "password", "hunter2")
+	sec2 := &unstructured.Unstructured{}
+	sec2.SetAPIVersion("v1")
+	sec2.SetKind("Secret")
+	sec2.SetNamespace("ns1")
+	sec2.SetName("api-creds")
+	data := map[string]interface{}{"token": base64.StdEncoding.EncodeToString([]byte("other-value"))}
+	if err := unstructured.SetNestedMap(sec2.Object, data, "data"); err != nil {
+		t.Fatalf("SetNestedMap: %v", err)
+	}
+	if _, err := dyn.Resource(secretGVR).Namespace("ns1").Create(context.Background(), sec2, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seeding second secret: %v", err)
+	}
+
+	mg := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"metadata": map[string]interface{}{"namespace": "ns1", "name": "my-cr"},
+			"spec": map[string]interface{}{
+				"credentialsRef": map[string]interface{}{"name": "db-creds", "key": "password"},
+				"apiRef":         map[string]interface{}{"name": "api-creds", "key": "token"},
+			},
+		},
+	}
+	mapping := []getter.FieldMappingItem{
+		{
+			InBody: "token", InCustomResource: "spec.credentialsRef",
+			Resolver: &getter.FieldResolver{Type: "secretRef", SecretRef: &getter.SecretRefResolver{
+				NameFromCustomResource: "spec.credentialsRef.name", KeyFromCustomResource: "spec.credentialsRef.key",
+			}},
+		},
+		{
+			InQuery: "auth", InCustomResource: "spec.apiRef",
+			Resolver: &getter.FieldResolver{Type: "secretRef", SecretRef: &getter.SecretRefResolver{
+				NameFromCustomResource: "spec.apiRef.name", KeyFromCustomResource: "spec.apiRef.key",
+			}},
+		},
+	}
+
+	resolved, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg, nil)
+	if err != nil {
+		t.Fatalf("ResolveRequestResolvers: %v", err)
+	}
+	if resolved[ResolverKey(mapping[0])] != "hunter2" {
+		t.Fatalf("expected first entry to resolve to hunter2, got %v", resolved[ResolverKey(mapping[0])])
+	}
+	if resolved[ResolverKey(mapping[1])] != "other-value" {
+		t.Fatalf("expected second entry to resolve to other-value, got %v", resolved[ResolverKey(mapping[1])])
+	}
+}
+
 func TestResolveSecretRefValueNotLeakedInErrors(t *testing.T) {
 	scheme := runtime.NewScheme()
 	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{secretGVR: "SecretList"})

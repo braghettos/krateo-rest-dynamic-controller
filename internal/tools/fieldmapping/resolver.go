@@ -33,11 +33,20 @@ type APILookupFunc func(ctx context.Context, r *getter.APILookupResolver, aliasV
 // other resolver type, or an apiLookup entry when lookupFn is nil, is a hard error — an unresolvable entry
 // must never be silently skipped here, since that would send the request without the value it was
 // supposed to carry.
+//
+// Resolution is cached per call, keyed by content (the secret's name+key; the lookup's action+requestParam
+// +alias) rather than by ResolverKey: two different FieldMapping entries that happen to reference the same
+// secret or resolve the same alias trigger exactly one Secret read / one lookup call, not one per entry.
+// The cache does not persist across calls (a fresh ResolveRequestResolvers call per Create/Update/Delete),
+// so it never serves a stale value across reconciles.
 func ResolveRequestResolvers(ctx context.Context, dyn dynamic.Interface, mapping []getter.FieldMappingItem, mg *unstructured.Unstructured, lookupFn APILookupFunc) (map[string]interface{}, error) {
 	if len(mapping) == 0 {
 		return nil, nil
 	}
 	out := make(map[string]interface{})
+	secretCache := make(map[string]string)
+	lookupCache := make(map[string]interface{})
+
 	for _, m := range mapping {
 		if m.Resolver == nil {
 			continue
@@ -47,22 +56,48 @@ func ResolveRequestResolvers(ctx context.Context, dyn dynamic.Interface, mapping
 		}
 		switch m.Resolver.Type {
 		case "secretRef":
-			val, err := resolveSecretRef(ctx, dyn, m.Resolver.SecretRef, mg)
+			r := m.Resolver.SecretRef
+			if r == nil {
+				return nil, fmt.Errorf("secretRef resolver is not configured (field %q)", m.InCustomResource)
+			}
+			name, err := readStringPath(mg, r.NameFromCustomResource)
 			if err != nil {
-				return nil, fmt.Errorf("resolving secretRef for field %q: %w", m.InCustomResource, err)
+				return nil, fmt.Errorf("reading secret name from %q: %w", r.NameFromCustomResource, err)
+			}
+			key, err := readStringPath(mg, r.KeyFromCustomResource)
+			if err != nil {
+				return nil, fmt.Errorf("reading secret key from %q: %w", r.KeyFromCustomResource, err)
+			}
+			cacheKey := name + "\x00" + key
+			val, cached := secretCache[cacheKey]
+			if !cached {
+				val, err = secretref.GetSecretValue(ctx, dyn, mg.GetNamespace(), name, key)
+				if err != nil {
+					return nil, fmt.Errorf("resolving secretRef for field %q: %w", m.InCustomResource, err)
+				}
+				secretCache[cacheKey] = val
 			}
 			out[ResolverKey(m)] = val
 		case "apiLookup":
 			if lookupFn == nil {
 				return nil, fmt.Errorf("apiLookup resolver requested but not supported at this call site (field %q)", m.InCustomResource)
 			}
+			r := m.Resolver.ApiLookup
+			if r == nil {
+				return nil, fmt.Errorf("apiLookup resolver is not configured (field %q)", m.InCustomResource)
+			}
 			aliasVal, err := readAnyPath(mg, m.InCustomResource)
 			if err != nil {
 				return nil, fmt.Errorf("reading apiLookup alias for field %q: %w", m.InCustomResource, err)
 			}
-			val, err := lookupFn(ctx, m.Resolver.ApiLookup, aliasVal)
-			if err != nil {
-				return nil, fmt.Errorf("resolving apiLookup for field %q: %w", m.InCustomResource, err)
+			cacheKey := fmt.Sprintf("%s\x00%s\x00%v", r.Action, r.RequestParam, aliasVal)
+			val, cached := lookupCache[cacheKey]
+			if !cached {
+				val, err = lookupFn(ctx, r, aliasVal)
+				if err != nil {
+					return nil, fmt.Errorf("resolving apiLookup for field %q: %w", m.InCustomResource, err)
+				}
+				lookupCache[cacheKey] = val
 			}
 			out[ResolverKey(m)] = val
 		default:
@@ -100,23 +135,6 @@ func CollectSecretRefNames(verbs []getter.VerbsDescription, mg *unstructured.Uns
 	}
 	sort.Strings(names)
 	return names
-}
-
-func resolveSecretRef(ctx context.Context, dyn dynamic.Interface, r *getter.SecretRefResolver, mg *unstructured.Unstructured) (string, error) {
-	if r == nil {
-		return "", fmt.Errorf("secretRef resolver is not configured")
-	}
-	name, err := readStringPath(mg, r.NameFromCustomResource)
-	if err != nil {
-		return "", fmt.Errorf("reading secret name from %q: %w", r.NameFromCustomResource, err)
-	}
-	key, err := readStringPath(mg, r.KeyFromCustomResource)
-	if err != nil {
-		return "", fmt.Errorf("reading secret key from %q: %w", r.KeyFromCustomResource, err)
-	}
-	// The Secret is always read from the CR instance's own namespace: SecretRefResolver has no namespace
-	// field, foreclosing a cross-namespace reference at the type level rather than a runtime check.
-	return secretref.GetSecretValue(ctx, dyn, mg.GetNamespace(), name, key)
 }
 
 // readAnyPath reads the raw value at path, whatever its JSON type (an apiLookup alias need not be a
