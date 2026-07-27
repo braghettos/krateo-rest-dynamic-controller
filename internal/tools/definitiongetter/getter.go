@@ -98,9 +98,41 @@ type FieldMappingItem struct {
 	InResponse       string        `json:"inResponse,omitempty"`
 	InCustomResource string        `json:"inCustomResource,omitempty"`
 	ValueMapping     *ValueMapping `json:"valueMapping,omitempty"`
+	// Resolver, when set, sources the field's value from something other than a literal read of
+	// InCustomResource. Valid only on request-direction entries (inPath/inQuery/inBody set). Applied
+	// BEFORE ValueMapping (a resolved value may still be alias/jq-transformed afterward).
+	Resolver *FieldResolver `json:"resolver,omitempty"`
 	// DefaultIfAbsent (response entries only) is the JSON value injected at the CR-domain destination when
 	// the API omits the inResponse source field entirely.
 	DefaultIfAbsent json.RawMessage `json:"defaultIfAbsent,omitempty"`
+}
+
+// FieldResolver is the shared primitive behind #30 (apiLookup) and #31 (secretRef): exactly one of
+// ApiLookup/SecretRef is set, matching Type.
+type FieldResolver struct {
+	Type      string             `json:"type"`
+	ApiLookup *APILookupResolver `json:"apiLookup,omitempty"`
+	SecretRef *SecretRefResolver `json:"secretRef,omitempty"`
+}
+
+// APILookupResolver resolves a Custom Resource alias into an id via a call in the SAME RestDefinition's
+// OAS document (decision: no cross-RestDefinition lookup).
+type APILookupResolver struct {
+	// Action is a VerbsDescription.Action in this RestDefinition (e.g. "findby").
+	Action string `json:"action"`
+	// RequestParam is the path/query param on the lookup call that receives the alias.
+	RequestParam string `json:"requestParam"`
+	// ResponsePath is a JSONPath into the lookup response for the resolved value.
+	ResponsePath string `json:"responsePath"`
+}
+
+// SecretRefResolver substitutes a Kubernetes Secret's value for the field. There is no namespace field:
+// the Secret is always read from the Custom Resource instance's own namespace.
+type SecretRefResolver struct {
+	// NameFromCustomResource is a JSONPath into the Custom Resource yielding the Secret's name.
+	NameFromCustomResource string `json:"nameFromCustomResource"`
+	// KeyFromCustomResource is a JSONPath into the Custom Resource yielding the key within the Secret's data.
+	KeyFromCustomResource string `json:"keyFromCustomResource"`
 }
 
 // ValueMapping is the runtime mirror of a value transform. Tier-1 'alias' is applied by the fieldmapping
