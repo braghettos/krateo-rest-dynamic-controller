@@ -15,7 +15,6 @@ import (
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
 	"github.com/krateoplatformops/plumbing/kubeutil/eventrecorder"
 	"github.com/krateoplatformops/plumbing/ptr"
-	prettylog "github.com/krateoplatformops/plumbing/slogs/pretty"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/builder"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
@@ -92,9 +91,6 @@ func main() {
 	metricsServerPort := flag.Int("metrics-server-port",
 		env.Int("REST_CONTROLLER_METRICS_SERVER_PORT", 0),
 		"The address to bind the metrics server to. If empty, metrics server is disabled.")
-	prettyLog := flag.Bool("pretty-log",
-		env.Bool("REST_CONTROLLER_PRETTY_LOG", false),
-		"emit human-readable colored logs instead of OTel-JSON logs (development only).")
 	otelEnabled := flag.Bool("otel-enabled",
 		env.Bool("OTEL_ENABLED", false),
 		"Enable OTLP metrics export for provider-runtime reconcile telemetry.")
@@ -124,28 +120,14 @@ func main() {
 		logLevel = slog.LevelDebug
 	}
 
-	// Default: JSON logs on stderr in the OTel log model (RFC3339Nano "timestamp",
-	// SeverityText + SeverityNumber, trace_id/span_id when a reconcile span is in
-	// context), compatible with logs-ingester. The shared handler lives in
-	// unstructured-runtime (pkg/logging) so every dynamic controller is consistent;
-	// "service" is kept alongside the OTel "service.name". The legacy human-readable
-	// prettylog handler is retained behind --pretty-log for local development.
-	var slogHandler slog.Handler
-	if *prettyLog {
-		slogHandler = prettylog.New(&slog.HandlerOptions{
-			Level:     logLevel,
-			AddSource: false,
-		},
-			prettylog.WithDestinationWriter(os.Stderr),
-			prettylog.WithColor(),
-			prettylog.WithOutputEmptyAttrs(),
-		)
-	} else {
-		slogHandler = logging.NewOTelJSONHandler(logLevel, os.Stderr,
-			slog.String("service.name", serviceName),
-			slog.String("service", serviceName),
-		)
-	}
+	// JSON logs on stderr in the OTel log model (RFC3339Nano "timestamp", SeverityText +
+	// SeverityNumber, trace_id/span_id when a reconcile span is in context), compatible with
+	// logs-ingester. The shared handler lives in unstructured-runtime (pkg/logging) so every dynamic
+	// controller is consistent; "service" is kept alongside the OTel "service.name".
+	slogHandler := logging.NewOTelJSONHandler(logLevel, os.Stderr,
+		slog.String("service.name", serviceName),
+		slog.String("service", serviceName),
+	)
 
 	log := logging.NewLogrLogger(logr.FromSlogHandler(slog.New(slogHandler).Handler()))
 
@@ -184,7 +166,6 @@ func main() {
 		WithValues("minErrorRetryInterval", *minErrorRetryInterval).
 		WithValues("maxErrorRetry", *maxErrorRetry).
 		WithValues("workers", *workers).
-		WithValues("prettyLog", *prettyLog).
 		WithValues("otelEnabled", *otelEnabled).
 		WithValues("otelTracingEnabled", *otelTracingEnabled).
 		WithValues("otelServiceName", *otelServiceName).

@@ -8,7 +8,7 @@ require (
 	github.com/gobuffalo/flect v1.0.3
 	github.com/google/go-cmp v0.7.0
 	github.com/itchyny/gojq v0.12.19
-	github.com/krateoplatformops/plumbing v1.7.3
+	github.com/krateoplatformops/plumbing v1.12.0
 	github.com/krateoplatformops/unstructured-runtime v1.0.0
 	github.com/pb33f/libopenapi v0.28.0
 	github.com/stretchr/testify v1.11.1
@@ -69,10 +69,14 @@ require (
 	github.com/wk8/go-ordered-map/v2 v2.1.9-0.20240815153524-6ea36470d1bd // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	go.opentelemetry.io/contrib/bridges/otelslog v0.19.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.20.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.43.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.44.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.44.0 // indirect
+	go.opentelemetry.io/otel/log v0.20.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.44.0 // indirect
+	go.opentelemetry.io/otel/sdk/log v0.20.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
@@ -104,6 +108,6 @@ require (
 
 replace github.com/pb33f/libopenapi => github.com/krateoplatformops/libopenapi v0.21.8
 
-replace github.com/krateoplatformops/unstructured-runtime => github.com/braghettos/unstructured-runtime v1.3.0
+replace github.com/krateoplatformops/unstructured-runtime => github.com/braghettos/unstructured-runtime v1.3.4
 
-replace github.com/krateoplatformops/plumbing => github.com/braghettos/plumbing v1.7.7
+replace github.com/krateoplatformops/plumbing => github.com/braghettos/plumbing v1.12.0
