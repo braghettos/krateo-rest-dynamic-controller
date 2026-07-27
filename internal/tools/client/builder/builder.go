@@ -10,6 +10,7 @@ import (
 
 	restclient "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client"
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/deepcopy"
+	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/fieldmapping"
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/pathparsing"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -30,7 +31,8 @@ type CallInfo struct {
 	Path                string
 	ReqParams           *RequestedParams
 	IdentifierFields    []string
-	RequestFieldMapping []getter.RequestFieldMappingItem // RequestFieldMapping is specific for the call (action)
+	RequestFieldMapping []getter.RequestFieldMappingItem // Deprecated: mirrored for backward compatibility; prefer FieldMapping.
+	FieldMapping        []getter.FieldMappingItem         // FieldMapping is the unified request/response mapping; only request-direction entries (inPath/inQuery/inBody) apply here.
 	Method              string
 	Action              apiaction.APIAction
 	SuccessCodes        []int               // extra status codes accepted as success for this verb (merged with OAS 2xx)
@@ -75,6 +77,7 @@ func APICallBuilder(cli restclient.UnstructuredClientInterface, info *getter.Inf
 				},
 				IdentifierFields:    identifierFields,
 				RequestFieldMapping: descr.RequestFieldMapping,
+				FieldMapping:        descr.FieldMapping,
 				SuccessCodes:        descr.SuccessCodes,
 				Headers:             descr.Headers,
 				Queries:             descr.Queries,
@@ -134,8 +137,13 @@ func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSp
 		}
 	}
 
-	// 2. Apply explicit request field mappings.
+	// 2. Apply explicit request field mappings (deprecated RequestFieldMapping).
 	applyRequestFieldMapping(callInfo, mg, reqConfiguration, mapBody)
+
+	// 2b. Apply the unified FieldMapping's request-direction entries (inPath/inQuery/inBody). Runs before
+	// spec/status auto-population (steps 3/4 below) so an explicit mapping always wins over a same-named
+	// field the resource happens to carry, matching step 2's precedence.
+	applyFieldMapping(callInfo, mg, reqConfiguration, mapBody)
 
 	specFields, err := unstructuredtools.GetFieldsFromUnstructured(mg, "spec")
 	if err != nil {
@@ -242,6 +250,67 @@ func applyRequestFieldMapping(callInfo *CallInfo, mg *unstructured.Unstructured,
 			//for k, v := range mapBody {
 			//	log.Printf("mapBody key: %s, value: %v\n", k, v)
 			//}
+		}
+	}
+}
+
+// applyFieldMapping populates the request configuration from the unified FieldMapping's request-direction
+// entries (inPath/inQuery/inBody set; inResponse-only entries are for the response side and are ignored
+// here). It mirrors applyRequestFieldMapping's write targets and validation exactly, adding the Tier-1
+// alias value transform. Tier-2 jq and Resolver (apiLookup/secretRef) are not applied here yet: an entry
+// requesting either is skipped (left unwritten) rather than sent untransformed, matching the response
+// side's precedent of skipping an entry it cannot yet fully honor (a deferred module-ref jq program).
+func applyFieldMapping(callInfo *CallInfo, mg *unstructured.Unstructured, reqConfiguration *restclient.RequestConfiguration, mapBody map[string]interface{}) {
+	for _, mapping := range callInfo.FieldMapping {
+		if mapping.InPath == "" && mapping.InQuery == "" && mapping.InBody == "" {
+			continue // response-direction (inResponse) entry, handled elsewhere
+		}
+
+		pathSegments, err := pathparsing.ParsePath(mapping.InCustomResource)
+		if err != nil || len(pathSegments) == 0 {
+			continue
+		}
+
+		val, found, err := unstructured.NestedFieldNoCopy(mg.Object, pathSegments...)
+		if err != nil || !found {
+			continue
+		}
+
+		if mapping.ValueMapping != nil {
+			switch mapping.ValueMapping.Type {
+			case "alias":
+				val = fieldmapping.ApplyAlias(val, mapping.ValueMapping.Aliases, fieldmapping.RequestCRToAPI)
+			default:
+				// jq (and any future type) is not wired for the request direction yet; skip rather than
+				// send a value that should have been transformed but wasn't.
+				continue
+			}
+		}
+
+		switch {
+		case mapping.InPath != "":
+			inPathSegments, err := pathparsing.ParsePath(mapping.InPath)
+			if err != nil || len(inPathSegments) != 1 {
+				continue
+			}
+			reqConfiguration.Parameters[inPathSegments[0]] = fmt.Sprintf("%v", val)
+
+		case mapping.InQuery != "":
+			inQuerySegments, err := pathparsing.ParsePath(mapping.InQuery)
+			if err != nil || len(inQuerySegments) != 1 {
+				continue
+			}
+			reqConfiguration.Query[inQuerySegments[0]] = fmt.Sprintf("%v", val)
+
+		case mapping.InBody != "":
+			inBodySegments, err := pathparsing.ParsePath(mapping.InBody)
+			if err != nil || len(inBodySegments) == 0 {
+				continue
+			}
+			convertedValue := deepcopy.DeepCopyJSONValue(val)
+			if err := unstructured.SetNestedField(mapBody, convertedValue, inBodySegments...); err != nil {
+				continue
+			}
 		}
 	}
 }

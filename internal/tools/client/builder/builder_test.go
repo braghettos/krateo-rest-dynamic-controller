@@ -1148,6 +1148,256 @@ func TestApplyRequestFieldMapping(t *testing.T) {
 	}
 }
 
+func TestApplyFieldMapping(t *testing.T) {
+	testCases := []struct {
+		name              string
+		callInfo          *CallInfo
+		mg                *unstructured.Unstructured
+		initialReqConfig  *restclient.RequestConfiguration
+		initialMapBody    map[string]interface{}
+		expectedReqConfig *restclient.RequestConfiguration
+		expectedMapBody   map[string]interface{}
+	}{
+		{
+			name: "Map from spec to path, query, and body, no value transform",
+			callInfo: &CallInfo{
+				FieldMapping: []getter.FieldMappingItem{
+					{InPath: "userId", InCustomResource: "spec.userIdentifier"},
+					{InQuery: "filter", InCustomResource: "spec.queryFilter"},
+					{InBody: "itemName", InCustomResource: "spec.name"},
+				},
+			},
+			mg: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"userIdentifier": "user-123",
+						"queryFilter":    "active",
+						"name":           "my-item",
+					},
+				},
+			},
+			initialReqConfig: &restclient.RequestConfiguration{
+				Parameters: make(map[string]string),
+				Query:      make(map[string]string),
+			},
+			initialMapBody: make(map[string]interface{}),
+			expectedReqConfig: &restclient.RequestConfiguration{
+				Parameters: map[string]string{"userId": "user-123"},
+				Query:      map[string]string{"filter": "active"},
+			},
+			expectedMapBody: map[string]interface{}{"itemName": "my-item"},
+		},
+		{
+			name: "Alias value transform applied in the request direction",
+			callInfo: &CallInfo{
+				FieldMapping: []getter.FieldMappingItem{
+					{
+						InQuery:          "role",
+						InCustomResource: "spec.role",
+						ValueMapping: &getter.ValueMapping{
+							Type: "alias",
+							Aliases: []getter.ValueAlias{
+								{CustomResourceValue: "maintainer", APIValue: "pull"},
+							},
+						},
+					},
+				},
+			},
+			mg: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{"role": "maintainer"},
+				},
+			},
+			initialReqConfig: &restclient.RequestConfiguration{
+				Parameters: make(map[string]string),
+				Query:      make(map[string]string),
+			},
+			initialMapBody: make(map[string]interface{}),
+			expectedReqConfig: &restclient.RequestConfiguration{
+				Parameters: make(map[string]string),
+				Query:      map[string]string{"role": "pull"},
+			},
+			expectedMapBody: make(map[string]interface{}),
+		},
+		{
+			name: "Unmapped alias value passes through unchanged",
+			callInfo: &CallInfo{
+				FieldMapping: []getter.FieldMappingItem{
+					{
+						InQuery:          "role",
+						InCustomResource: "spec.role",
+						ValueMapping: &getter.ValueMapping{
+							Type: "alias",
+							Aliases: []getter.ValueAlias{
+								{CustomResourceValue: "maintainer", APIValue: "pull"},
+							},
+						},
+					},
+				},
+			},
+			mg: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{"role": "owner"},
+				},
+			},
+			initialReqConfig: &restclient.RequestConfiguration{
+				Parameters: make(map[string]string),
+				Query:      make(map[string]string),
+			},
+			initialMapBody: make(map[string]interface{}),
+			expectedReqConfig: &restclient.RequestConfiguration{
+				Parameters: make(map[string]string),
+				Query:      map[string]string{"role": "owner"},
+			},
+			expectedMapBody: make(map[string]interface{}),
+		},
+		{
+			name: "jq value transform is not yet wired for request direction: entry is skipped",
+			callInfo: &CallInfo{
+				FieldMapping: []getter.FieldMappingItem{
+					{
+						InQuery:          "role",
+						InCustomResource: "spec.role",
+						ValueMapping: &getter.ValueMapping{
+							Type: "jq",
+							JQ:   &getter.JQProgram{Inline: `.`},
+						},
+					},
+				},
+			},
+			mg: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{"role": "owner"},
+				},
+			},
+			initialReqConfig: &restclient.RequestConfiguration{
+				Parameters: make(map[string]string),
+				Query:      make(map[string]string),
+			},
+			initialMapBody: make(map[string]interface{}),
+			expectedReqConfig: &restclient.RequestConfiguration{
+				Parameters: make(map[string]string),
+				Query:      make(map[string]string),
+			},
+			expectedMapBody: make(map[string]interface{}),
+		},
+		{
+			name: "inResponse-only entries are ignored",
+			callInfo: &CallInfo{
+				FieldMapping: []getter.FieldMappingItem{
+					{InResponse: "id", InCustomResource: "status.id"},
+				},
+			},
+			mg: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"status": map[string]interface{}{"id": "abc"},
+				},
+			},
+			initialReqConfig: &restclient.RequestConfiguration{
+				Parameters: make(map[string]string),
+				Query:      make(map[string]string),
+			},
+			initialMapBody: make(map[string]interface{}),
+			expectedReqConfig: &restclient.RequestConfiguration{
+				Parameters: make(map[string]string),
+				Query:      make(map[string]string),
+			},
+			expectedMapBody: make(map[string]interface{}),
+		},
+		{
+			name: "Nested in body mapping",
+			callInfo: &CallInfo{
+				FieldMapping: []getter.FieldMappingItem{
+					{InBody: "metadata.owner", InCustomResource: "spec.owner"},
+				},
+			},
+			mg: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{"owner": "team-a"},
+				},
+			},
+			initialReqConfig: &restclient.RequestConfiguration{
+				Parameters: make(map[string]string),
+				Query:      make(map[string]string),
+			},
+			initialMapBody: make(map[string]interface{}),
+			expectedReqConfig: &restclient.RequestConfiguration{
+				Parameters: make(map[string]string),
+				Query:      make(map[string]string),
+			},
+			expectedMapBody: map[string]interface{}{
+				"metadata": map[string]interface{}{"owner": "team-a"},
+			},
+		},
+		{
+			name: "Nil FieldMapping",
+			callInfo: &CallInfo{
+				FieldMapping: nil,
+			},
+			mg: &unstructured.Unstructured{
+				Object: map[string]interface{}{"spec": map[string]interface{}{"id": "123"}},
+			},
+			initialReqConfig: &restclient.RequestConfiguration{
+				Parameters: make(map[string]string),
+				Query:      make(map[string]string),
+			},
+			initialMapBody: make(map[string]interface{}),
+			expectedReqConfig: &restclient.RequestConfiguration{
+				Parameters: make(map[string]string),
+				Query:      make(map[string]string),
+			},
+			expectedMapBody: make(map[string]interface{}),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			applyFieldMapping(tc.callInfo, tc.mg, tc.initialReqConfig, tc.initialMapBody)
+
+			if diff := cmp.Diff(tc.expectedReqConfig.Parameters, tc.initialReqConfig.Parameters); diff != "" {
+				t.Errorf("mismatch in parameters (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.expectedReqConfig.Query, tc.initialReqConfig.Query); diff != "" {
+				t.Errorf("mismatch in query (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.expectedMapBody, tc.initialMapBody); diff != "" {
+				t.Errorf("mismatch in body (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestBuildCallConfig_FieldMappingPrecedesAutoPopulation proves the ordering guarantee applyFieldMapping's
+// doc comment claims: an explicit FieldMapping entry must win over the resource's own spec/status
+// auto-population of a same-named path/query parameter, exactly like the deprecated RequestFieldMapping
+// already does.
+func TestBuildCallConfig_FieldMappingPrecedesAutoPopulation(t *testing.T) {
+	ci := &CallInfo{
+		Path:   "/test/{id}",
+		Method: "GET",
+		ReqParams: &RequestedParams{
+			Parameters: text.StringSet{"id": {}}, // "id" is also a spec field, auto-populated by processFields
+		},
+		FieldMapping: []getter.FieldMappingItem{
+			{InPath: "id", InCustomResource: "spec.explicitId"},
+		},
+	}
+	mg := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"id":         "auto-populated-id",
+				"explicitId": "explicit-id",
+			},
+		},
+	}
+
+	got := BuildCallConfig(ci, mg, nil)
+
+	if got.Parameters["id"] != "explicit-id" {
+		t.Fatalf("expected the explicit FieldMapping entry to win, got %q", got.Parameters["id"])
+	}
+}
+
 func TestBuildCallConfig_SuccessCodesPropagated(t *testing.T) {
 	ci := &CallInfo{
 		Path:         "/test/{id}",

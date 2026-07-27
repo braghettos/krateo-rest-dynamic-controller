@@ -108,7 +108,7 @@ func TestNormalizeResponseBody_NoOpCases(t *testing.T) {
 
 func TestApplyAlias_Directions(t *testing.T) {
 	aliases := []getter.ValueAlias{{CustomResourceValue: "read", APIValue: "pull"}}
-	assert.Equal(t, "read", applyAlias("pull", aliases, ResponseAPIToCR))
-	assert.Equal(t, "pull", applyAlias("read", aliases, RequestCRToAPI))
-	assert.Equal(t, "admin", applyAlias("admin", aliases, ResponseAPIToCR), "unmapped passes through")
+	assert.Equal(t, "read", ApplyAlias("pull", aliases, ResponseAPIToCR))
+	assert.Equal(t, "pull", ApplyAlias("read", aliases, RequestCRToAPI))
+	assert.Equal(t, "admin", ApplyAlias("admin", aliases, ResponseAPIToCR), "unmapped passes through")
 }

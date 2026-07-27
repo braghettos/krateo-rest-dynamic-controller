@@ -189,7 +189,7 @@ func resolveResponseEntry(ctx context.Context, entry getter.FieldMappingItem, bo
 	if entry.ValueMapping != nil {
 		switch entry.ValueMapping.Type {
 		case "alias":
-			val = applyAlias(val, entry.ValueMapping.Aliases, ResponseAPIToCR)
+			val = ApplyAlias(val, entry.ValueMapping.Aliases, ResponseAPIToCR)
 		case "jq":
 			jq := entry.ValueMapping.JQ
 			if jq == nil || jq.Inline == "" {
@@ -220,9 +220,9 @@ func resolveResponseEntry(ctx context.Context, entry getter.FieldMappingItem, bo
 	return resolvedEntry{src: srcPath, dst: dstPath, val: val}, true, nil
 }
 
-// applyAlias rewrites a value across the CR<->API boundary using a finite set of bidirectional pairs.
+// ApplyAlias rewrites a value across the CR<->API boundary using a finite set of bidirectional pairs.
 // Any value without a matching pair passes through unchanged.
-func applyAlias(v interface{}, aliases []getter.ValueAlias, dir Direction) interface{} {
+func ApplyAlias(v interface{}, aliases []getter.ValueAlias, dir Direction) interface{} {
 	s := fmt.Sprintf("%v", v)
 	for _, a := range aliases {
 		switch dir {
