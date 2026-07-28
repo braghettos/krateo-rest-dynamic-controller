@@ -173,6 +173,15 @@ func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSp
 	// 4. Apply values from the main resource's status
 	processFields(callInfo, statusFields, reqConfiguration, mapBody)
 
+	// 4b. Drop the CR-side source of every Resolver entry from the body. A resolver's
+	// inCustomResource is a POINTER the controller dereferences (a secretRef's {name,key}, an
+	// apiLookup's alias) — the dereferenced result is already written at the entry's inBody, so the
+	// pointer itself is CR-domain plumbing that no API expects. Auto-population (step 3) cannot know
+	// that and would forward it verbatim, which strict APIs reject outright: Keycloak answers 400 to a
+	// CredentialRepresentation carrying an unknown `valueSecretRef`. Only Resolver entries are
+	// stripped — a plain relocation's source stays, since it is ordinary API-bound data.
+	stripResolverSources(callInfo, mapBody)
+
 	// 5. Set the body in the request configuration
 	reqConfiguration.Body = mapBody
 
@@ -409,9 +418,74 @@ func processFields(callInfo *CallInfo, fields map[string]interface{}, reqConfigu
 		// Therefore, we do not set them here since we are processing only the main resource fields (spec/status) with this function.
 
 		if callInfo.ReqParams.Body.Contains(field) {
-			if mapBody[field] == nil {
-				mapBody[field] = value
+			// FieldMapping runs before auto-population and must win — but only for the exact paths it
+			// wrote, not for the whole top-level field. Skipping the field wholesale (the previous
+			// behaviour) silently dropped every sibling the CR declared under it: a mapping onto
+			// `credentials.0.value` discarded that credential's `type`/`temporary` and the entire
+			// second credential, so the request went out structurally incomplete. Underlay the spec
+			// value instead, so mapped paths keep their mapped values and everything else is filled in.
+			mapBody[field] = underlaySpecValue(value, mapBody[field])
+		}
+	}
+}
+
+// stripResolverSources removes, from the request body, the CR-side path that each Resolver entry reads
+// from. Paths are spec/status-relative once in the body (auto-population lifts spec fields to the top
+// level), so a leading "spec."/"status." segment is trimmed before removal. Entries without a Resolver
+// are left alone.
+func stripResolverSources(callInfo *CallInfo, mapBody map[string]interface{}) {
+	for _, mapping := range callInfo.FieldMapping {
+		if mapping.Resolver == nil || mapping.InCustomResource == "" {
+			continue
+		}
+		trimmed := strings.TrimPrefix(strings.TrimPrefix(mapping.InCustomResource, "spec."), "status.")
+		segs, err := pathparsing.ParsePath(trimmed)
+		if err != nil || len(segs) == 0 {
+			continue
+		}
+		pathparsing.RemoveNestedField(mapBody, segs)
+	}
+}
+
+// underlaySpecValue returns `written` (what fieldMapping produced) with `spec` filled in wherever
+// `written` does not already define a value. `written` always wins on conflict, at whatever depth the
+// conflict occurs; a nil `written` (including a gap left by array auto-vivification, e.g. mapping only
+// index 1) yields the spec value outright. Maps merge key-wise and arrays element-wise by index, with
+// spec elements past the end of `written` appended, so a mapping that touches one element never drops
+// the others.
+func underlaySpecValue(spec, written interface{}) interface{} {
+	if written == nil {
+		return spec
+	}
+	switch w := written.(type) {
+	case map[string]interface{}:
+		s, ok := spec.(map[string]interface{})
+		if !ok {
+			return written // shape disagreement: the mapped value is authoritative
+		}
+		for k, sv := range s {
+			if wv, exists := w[k]; exists {
+				w[k] = underlaySpecValue(sv, wv)
+			} else {
+				w[k] = sv
 			}
 		}
+		return w
+	case []interface{}:
+		s, ok := spec.([]interface{})
+		if !ok {
+			return written
+		}
+		for i := range w {
+			if i < len(s) {
+				w[i] = underlaySpecValue(s[i], w[i])
+			}
+		}
+		for i := len(w); i < len(s); i++ {
+			w = append(w, s[i])
+		}
+		return w
+	default:
+		return written // scalar written by fieldMapping wins outright
 	}
 }

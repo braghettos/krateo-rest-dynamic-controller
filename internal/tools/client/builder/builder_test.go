@@ -1512,6 +1512,121 @@ func TestBuildCallConfig_FieldMappingPrecedesAutoPopulation(t *testing.T) {
 	}
 }
 
+// TestBuildCallConfig_ResolverSourceStrippedFromBody proves a Resolver's CR-side pointer never reaches
+// the API. Auto-population would otherwise forward `valueSecretRef` verbatim alongside the resolved
+// `value`; Keycloak rejects the resulting CredentialRepresentation with 400. The resolved value must
+// survive, and a NON-resolver mapping's source must NOT be stripped.
+func TestBuildCallConfig_ResolverSourceStrippedFromBody(t *testing.T) {
+	resolverEntry := getter.FieldMappingItem{
+		InBody:           "credentials.0.value",
+		InCustomResource: "spec.credentials.0.valueSecretRef",
+		Resolver: &getter.FieldResolver{
+			Type: "secretRef",
+			SecretRef: &getter.SecretRefResolver{
+				NameFromCustomResource: "spec.credentials.0.valueSecretRef.name",
+				KeyFromCustomResource:  "spec.credentials.0.valueSecretRef.key",
+			},
+		},
+	}
+	plainEntry := getter.FieldMappingItem{InBody: "label", InCustomResource: "spec.displayName"}
+
+	ci := &CallInfo{
+		Path: "/users", Method: "POST",
+		ReqParams:    &RequestedParams{Body: text.StringSet{"credentials": {}, "displayName": {}}},
+		FieldMapping: []getter.FieldMappingItem{resolverEntry, plainEntry},
+	}
+	mg := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"displayName": "Alice",
+				"credentials": []interface{}{
+					map[string]interface{}{
+						"type":           "password",
+						"valueSecretRef": map[string]interface{}{"name": "alice-secret", "key": "password"},
+					},
+				},
+			},
+		},
+	}
+	resolved := map[string]interface{}{fieldmapping.ResolverKey(resolverEntry): "hunter2"}
+
+	body := BuildCallConfig(ci, mg, nil, resolved).Body.(map[string]interface{})
+	c0 := body["credentials"].([]interface{})[0].(map[string]interface{})
+
+	if _, leaked := c0["valueSecretRef"]; leaked {
+		t.Errorf("resolver source leaked into the request body: %#v", c0)
+	}
+	if c0["value"] != "hunter2" {
+		t.Errorf("resolved value lost, got %#v", c0["value"])
+	}
+	if c0["type"] != "password" {
+		t.Errorf("unmapped sibling dropped, got %#v", c0)
+	}
+	// A non-resolver mapping relocates ordinary data; its source is still API-bound.
+	if body["displayName"] != "Alice" {
+		t.Errorf("non-resolver source must not be stripped, got %#v", body["displayName"])
+	}
+}
+
+// TestBuildCallConfig_FieldMappingKeepsUnmappedSiblings pins the granularity of the precedence rule
+// above: a fieldMapping writing INTO a body field must win only for the path it wrote, while every
+// sibling the CR declared under that same top-level field is still auto-populated. Previously
+// processFields skipped the whole field once fieldMapping had touched it, so mapping
+// `credentials.0.value` shipped a body containing ONLY that value — dropping `type`/`temporary` and
+// the entire second credential. Reproduces the live Keycloak shape: the OTP credential silently never
+// registered because it reached the API with just `secretData` and no `type`/`credentialData`.
+func TestBuildCallConfig_FieldMappingKeepsUnmappedSiblings(t *testing.T) {
+	ci := &CallInfo{
+		Path:   "/users",
+		Method: "POST",
+		ReqParams: &RequestedParams{
+			Body: text.StringSet{"credentials": {}, "username": {}},
+		},
+		FieldMapping: []getter.FieldMappingItem{
+			{InBody: "credentials.0.value", InCustomResource: "spec.credentials.0.pw"},
+			{InBody: "credentials.1.secretData", InCustomResource: "spec.credentials.1.seed"},
+		},
+	}
+	mg := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"username": "alice",
+				"credentials": []interface{}{
+					map[string]interface{}{"type": "password", "temporary": false, "pw": "pw-val"},
+					map[string]interface{}{"type": "otp", "userLabel": "OTP", "credentialData": "{}", "seed": "seed-val"},
+				},
+			},
+		},
+	}
+
+	got := BuildCallConfig(ci, mg, nil, nil)
+
+	creds, ok := got.Body.(map[string]interface{})["credentials"].([]interface{})
+	if !ok || len(creds) != 2 {
+		t.Fatalf("expected 2 credentials in body, got %#v", got.Body.(map[string]interface{})["credentials"])
+	}
+
+	c0 := creds[0].(map[string]interface{})
+	if c0["value"] != "pw-val" {
+		t.Errorf("credentials[0].value: mapped value lost, got %#v", c0["value"])
+	}
+	if c0["type"] != "password" || c0["temporary"] != false {
+		t.Errorf("credentials[0]: unmapped siblings dropped, got %#v", c0)
+	}
+
+	c1 := creds[1].(map[string]interface{})
+	if c1["secretData"] != "seed-val" {
+		t.Errorf("credentials[1].secretData: mapped value lost, got %#v", c1["secretData"])
+	}
+	if c1["type"] != "otp" || c1["credentialData"] != "{}" || c1["userLabel"] != "OTP" {
+		t.Errorf("credentials[1]: unmapped siblings dropped, got %#v", c1)
+	}
+
+	if got.Body.(map[string]interface{})["username"] != "alice" {
+		t.Errorf("unrelated body field lost, got %#v", got.Body)
+	}
+}
+
 func TestBuildCallConfig_SuccessCodesPropagated(t *testing.T) {
 	ci := &CallInfo{
 		Path:         "/test/{id}",
