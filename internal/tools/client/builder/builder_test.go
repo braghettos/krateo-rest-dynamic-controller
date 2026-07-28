@@ -1407,6 +1407,51 @@ func TestApplyFieldMapping_ResolverUsesResolvedValue(t *testing.T) {
 	}
 }
 
+// TestApplyFieldMapping_ResolverArrayInBody is a regression test for issue #33: a resolved secretRef value
+// must be writable into an array-shaped request body path (e.g. Keycloak's credentials[0].value), not just
+// a flat map path. mapBody starts empty, so this also exercises SetNestedField's array auto-vivification.
+func TestApplyFieldMapping_ResolverArrayInBody(t *testing.T) {
+	mapping := getter.FieldMappingItem{
+		InBody:           "credentials[0].value",
+		InCustomResource: "spec.credentials[0].valueSecretRef",
+		Resolver: &getter.FieldResolver{
+			Type: "secretRef",
+			SecretRef: &getter.SecretRefResolver{
+				NameFromCustomResource: "spec.credentials[0].valueSecretRef.name",
+				KeyFromCustomResource:  "spec.credentials[0].valueSecretRef.key",
+			},
+		},
+	}
+	callInfo := &CallInfo{FieldMapping: []getter.FieldMappingItem{mapping}}
+	mg := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"credentials": []interface{}{
+					map[string]interface{}{
+						"valueSecretRef": map[string]interface{}{"name": "alice-secret", "key": "password"},
+					},
+				},
+			},
+		},
+	}
+	resolved := map[string]interface{}{
+		fieldmapping.ResolverKey(mapping): "hunter2",
+	}
+	reqConfig := &restclient.RequestConfiguration{Parameters: map[string]string{}, Query: map[string]string{}}
+	mapBody := map[string]interface{}{}
+
+	applyFieldMapping(callInfo, mg, reqConfig, mapBody, resolved)
+
+	creds, ok := mapBody["credentials"].([]interface{})
+	if !ok || len(creds) != 1 {
+		t.Fatalf("expected mapBody[\"credentials\"] to be a 1-element array, got %#v", mapBody["credentials"])
+	}
+	entry, ok := creds[0].(map[string]interface{})
+	if !ok || entry["value"] != "hunter2" {
+		t.Fatalf("expected credentials[0].value to be %q, got %#v", "hunter2", creds[0])
+	}
+}
+
 // TestApplyFieldMapping_ResolverMissingFromResolvedIsSkipped proves a Resolver entry with no matching
 // entry in resolved is skipped (left unwritten), not sent with a zero-value/nil placeholder.
 func TestApplyFieldMapping_ResolverMissingFromResolvedIsSkipped(t *testing.T) {

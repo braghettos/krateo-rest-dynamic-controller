@@ -192,7 +192,7 @@ func applyRequestFieldMapping(callInfo *CallInfo, mg *unstructured.Unstructured,
 			continue
 		}
 
-		val, found, err := unstructured.NestedFieldNoCopy(mg.Object, pathSegments...)
+		val, found, err := pathparsing.GetNestedField(mg.Object, pathSegments)
 		if err != nil || !found {
 			continue
 		}
@@ -247,7 +247,7 @@ func applyRequestFieldMapping(callInfo *CallInfo, mg *unstructured.Unstructured,
 			//}
 
 			// Set the value in the body map at the correct nested path
-			err = unstructured.SetNestedField(mapBody, convertedValue, inBodySegments...)
+			err = pathparsing.SetNestedField(mapBody, convertedValue, inBodySegments)
 			if err != nil {
 				continue
 			}
@@ -291,7 +291,7 @@ func applyFieldMapping(callInfo *CallInfo, mg *unstructured.Unstructured, reqCon
 			if err != nil || len(pathSegments) == 0 {
 				continue
 			}
-			v, found, err := unstructured.NestedFieldNoCopy(mg.Object, pathSegments...)
+			v, found, err := pathparsing.GetNestedField(mg.Object, pathSegments)
 			if err != nil || !found {
 				continue
 			}
@@ -330,7 +330,7 @@ func applyFieldMapping(callInfo *CallInfo, mg *unstructured.Unstructured, reqCon
 				continue
 			}
 			convertedValue := deepcopy.DeepCopyJSONValue(val)
-			if err := unstructured.SetNestedField(mapBody, convertedValue, inBodySegments...); err != nil {
+			if err := pathparsing.SetNestedField(mapBody, convertedValue, inBodySegments); err != nil {
 				continue
 			}
 		}

@@ -79,6 +79,51 @@ func TestResolveRequestResolvers_SecretRef(t *testing.T) {
 	}
 }
 
+// TestResolveRequestResolvers_SecretRefArrayPath is a regression test for issue #33: nameFromCustomResource
+// / keyFromCustomResource must be able to address a secretRef nested inside an array — e.g. Keycloak's
+// spec.credentials[0].valueSecretRef — the exact shape the issue's reproduction used.
+func TestResolveRequestResolvers_SecretRefArrayPath(t *testing.T) {
+	dyn := newFakeClientWithSecret(t, "ns1", "alice-secret", "password", "hunter2")
+	mg := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"metadata": map[string]interface{}{"namespace": "ns1", "name": "alice"},
+			"spec": map[string]interface{}{
+				"credentials": []interface{}{
+					map[string]interface{}{
+						"valueSecretRef": map[string]interface{}{
+							"name": "alice-secret",
+							"key":  "password",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	mapping := []getter.FieldMappingItem{
+		{
+			InBody:           "credentials[0].value",
+			InCustomResource: "spec.credentials[0].valueSecretRef",
+			Resolver: &getter.FieldResolver{
+				Type: "secretRef",
+				SecretRef: &getter.SecretRefResolver{
+					NameFromCustomResource: "spec.credentials[0].valueSecretRef.name",
+					KeyFromCustomResource:  "spec.credentials[0].valueSecretRef.key",
+				},
+			},
+		},
+	}
+
+	resolved, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg, nil)
+	if err != nil {
+		t.Fatalf("ResolveRequestResolvers: %v", err)
+	}
+	key := ResolverKey(mapping[0])
+	if resolved[key] != "hunter2" {
+		t.Fatalf("expected resolved value %q, got %q", "hunter2", resolved[key])
+	}
+}
+
 func TestResolveRequestResolvers_MissingSecretIsError(t *testing.T) {
 	scheme := runtime.NewScheme()
 	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{secretGVR: "SecretList"})

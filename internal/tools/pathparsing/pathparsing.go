@@ -80,23 +80,39 @@ func ParsePath(path string) ([]string, error) {
 
 	segments := make([]string, 0, len(merged))
 	for _, p := range merged {
-		seg, err := parseSegment(p)
+		segs, err := parseSegmentGroup(p)
 		if err != nil {
 			return nil, err
 		}
-		segments = append(segments, seg)
+		segments = append(segments, segs...)
 	}
 
 	return segments, nil
 }
 
-// parseSegment parses a single segment, handling bracket notation and validation.
-func parseSegment(s string) (string, error) {
+// isDigits reports whether s is non-empty and consists entirely of ASCII digits.
+func isDigits(s string) bool {
 	if s == "" {
-		return "", fmt.Errorf("malformed path: empty segment")
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// parseSegmentGroup parses one dot-separated token into one or more path segments. A token is usually a
+// single segment (a plain name, or one bracket group), but a name immediately followed by an array-index
+// bracket with no separating dot — "credentials[0]" — is also accepted and split into two segments
+// ("credentials", "0"), so an array index need not be preceded by a dot.
+func parseSegmentGroup(s string) ([]string, error) {
+	if s == "" {
+		return nil, fmt.Errorf("malformed path: empty segment")
 	}
 
-	// Strip leading dots for validation, but keep them in result
+	// Strip leading dots for validation, but keep them in the result.
 	leadingDots := 0
 	for leadingDots < len(s) && s[leadingDots] == '.' {
 		leadingDots++
@@ -104,26 +120,53 @@ func parseSegment(s string) (string, error) {
 
 	if leadingDots == len(s) {
 		// All dots, no content
-		return "", fmt.Errorf("malformed path: segment has only dots")
+		return nil, fmt.Errorf("malformed path: segment has only dots")
 	}
 
 	rest := s[leadingDots:]
 
-	// Plain segment (no brackets)
-	if !strings.HasPrefix(rest, "[") {
+	bracketStart := strings.IndexByte(rest, '[')
+
+	// Plain segment (no brackets at all).
+	if bracketStart < 0 {
 		if strings.ContainsAny(rest, "[]'\"") { // If there is no opening bracket, these chars are invalid
-			return "", fmt.Errorf("malformed path: invalid characters in segment")
+			return nil, fmt.Errorf("malformed path: invalid characters in segment")
 		}
-		return s, nil // return with leading dots
+		return []string{s}, nil // return with leading dots
 	}
 
 	// Bracketed segment with leading dots is invalid, e.g., just .['field'] is not allowed
-	if leadingDots > 0 {
-		return "", fmt.Errorf("malformed path: dot before bracket")
+	if leadingDots > 0 && bracketStart == 0 {
+		return nil, fmt.Errorf("malformed path: dot before bracket")
 	}
 
-	// Bracketed segment: must be ['...'] or ["..."]
-	if len(rest) < 4 {
+	if bracketStart == 0 {
+		seg, err := parseBracketContent(rest)
+		if err != nil {
+			return nil, err
+		}
+		return []string{seg}, nil
+	}
+
+	// "name[...]" form: a plain-name prefix immediately followed by one trailing bracket group, e.g.
+	// "credentials[0]". The leading dots (if any) attach to the name prefix, as for a plain segment.
+	prefix := rest[:bracketStart]
+	if strings.ContainsAny(prefix, "]'\"") {
+		return nil, fmt.Errorf("malformed path: invalid characters in segment")
+	}
+	seg, err := parseBracketContent(rest[bracketStart:])
+	if err != nil {
+		return nil, err
+	}
+	return []string{s[:leadingDots] + prefix, seg}, nil
+}
+
+// parseBracketContent parses a single bracket group "[...]" (rest must start with '[' and contain exactly
+// one closed group — a second bracket group directly appended, e.g. "[0][1]", is rejected as "adjacent
+// brackets must be separated by dot", same as adjacent quoted brackets). Accepts a quoted string
+// (['a'], ["a"]) or an unquoted non-negative integer index ([0], [12]).
+func parseBracketContent(rest string) (string, error) {
+	if len(rest) < 3 {
 		return "", fmt.Errorf("malformed path: bracket must contain quoted string")
 	}
 	if !strings.HasSuffix(rest, "]") {
@@ -137,8 +180,20 @@ func parseSegment(s string) (string, error) {
 	}
 
 	inner := rest[1 : len(rest)-1] // remove [ and ] at the ends
-	if len(inner) < 2 {
+	if inner == "" {
 		return "", fmt.Errorf("malformed path: empty bracket content")
+	}
+
+	// An unquoted non-negative integer is a valid bracket segment — an array index, e.g. [0], [12] — kept
+	// as the bare digit string, the same representation dotted numeric segments (e.g. "credentials.0.x")
+	// already produce. Whether it is ultimately used as an array index or a map key is decided later, by
+	// GetNestedField/SetNestedField, from the actual (or, when creating, the intended) container shape.
+	if isDigits(inner) && (len(inner) == 1 || inner[0] != '0') {
+		return inner, nil
+	}
+
+	if len(inner) < 2 {
+		return "", fmt.Errorf("malformed path: bracket must contain quoted string")
 	}
 
 	// At this point, inner should be a quoted string like 'a.b' or "a.b"

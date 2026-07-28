@@ -207,6 +207,45 @@ func TestParsePath(t *testing.T) {
 			path:     "user.[\"address.city\"].street",
 			expected: []string{"user", "address.city", "street"},
 		},
+
+		// Array index bracket notation (issue #33)
+		{
+			name:     "Array index in brackets",
+			path:     "credentials[0].value",
+			expected: []string{"credentials", "0", "value"},
+		},
+		{
+			name:     "Multi-digit array index",
+			path:     "items[12].name",
+			expected: []string{"items", "12", "name"},
+		},
+		{
+			name:     "Array index at path start",
+			path:     "[0].value",
+			expected: []string{"0", "value"},
+		},
+		{
+			name:     "Array index at path end",
+			path:     "credentials[0]",
+			expected: []string{"credentials", "0"},
+		},
+		{
+			name:          "Chained array indices are not supported",
+			path:          "matrix[0][1]",
+			expectError:   true,
+			errorContains: "adjacent brackets",
+		},
+		{
+			name:     "Dotted numeric segment equivalent to bracket index",
+			path:     "credentials.0.value",
+			expected: []string{"credentials", "0", "value"},
+		},
+		{
+			name:          "Redundant leading zero index is rejected as an index but still invalid unquoted",
+			path:          "credentials[00].value",
+			expectError:   true,
+			errorContains: "bracket must contain quoted string",
+		},
 	}
 
 	for _, tc := range testCases {

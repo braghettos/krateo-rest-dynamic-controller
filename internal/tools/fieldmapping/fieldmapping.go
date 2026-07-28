@@ -15,7 +15,6 @@ import (
 	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/jqengine"
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/pathparsing"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // Direction indicates which way a value transform is applied.
@@ -69,7 +68,7 @@ func NormalizeResponseBody(ctx context.Context, verbs []getter.VerbsDescription,
 		dstKeys[pathKey(r.dst)] = true
 	}
 	for _, r := range resolved {
-		if err := unstructured.SetNestedField(body, r.val, r.dst...); err != nil {
+		if err := pathparsing.SetNestedField(body, r.val, r.dst); err != nil {
 			return fmt.Errorf("setting normalized field: %w", err)
 		}
 	}
@@ -78,7 +77,7 @@ func NormalizeResponseBody(ctx context.Context, verbs []getter.VerbsDescription,
 		if equalPath(r.src, r.dst) || dstKeys[pathKey(r.src)] {
 			continue
 		}
-		unstructured.RemoveNestedField(body, r.src...)
+		pathparsing.RemoveNestedField(body, r.src)
 	}
 	return nil
 }
@@ -165,7 +164,7 @@ func resolveResponseEntry(ctx context.Context, entry getter.FieldMappingItem, bo
 	if err != nil || len(srcPath) == 0 {
 		return resolvedEntry{}, false, nil
 	}
-	val, found, err := unstructured.NestedFieldNoCopy(body, srcPath...)
+	val, found, err := pathparsing.GetNestedField(body, srcPath)
 	if err != nil {
 		return resolvedEntry{}, false, nil
 	}

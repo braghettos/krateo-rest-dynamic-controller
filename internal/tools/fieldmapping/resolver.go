@@ -138,13 +138,14 @@ func CollectSecretRefNames(verbs []getter.VerbsDescription, mg *unstructured.Uns
 }
 
 // readAnyPath reads the raw value at path, whatever its JSON type (an apiLookup alias need not be a
-// string — e.g. a numeric id used to look up another numeric id).
+// string — e.g. a numeric id used to look up another numeric id). The path may index into an array (e.g.
+// "credentials[0].value" or "credentials.0.value") as well as nest through maps.
 func readAnyPath(mg *unstructured.Unstructured, path string) (interface{}, error) {
 	segments, err := pathparsing.ParsePath(path)
 	if err != nil || len(segments) == 0 {
 		return nil, fmt.Errorf("invalid path %q", path)
 	}
-	val, found, err := unstructured.NestedFieldNoCopy(mg.Object, segments...)
+	val, found, err := pathparsing.GetNestedField(mg.Object, segments)
 	if err != nil || !found {
 		return nil, fmt.Errorf("path %q not found on the custom resource", path)
 	}
@@ -156,7 +157,7 @@ func readStringPath(mg *unstructured.Unstructured, path string) (string, error) 
 	if err != nil || len(segments) == 0 {
 		return "", fmt.Errorf("invalid path %q", path)
 	}
-	val, found, err := unstructured.NestedFieldNoCopy(mg.Object, segments...)
+	val, found, err := pathparsing.GetNestedField(mg.Object, segments)
 	if err != nil || !found {
 		return "", fmt.Errorf("path %q not found on the custom resource", path)
 	}
