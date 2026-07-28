@@ -24,6 +24,13 @@ import (
 // use it to decide whether it is safe to proceed without the definition or must retry.
 var ErrDefinitionNotFound = errors.New("no matching RestDefinition found")
 
+// configurationVersion is the fixed API version of every oasgen-generated <Kind>Configuration CRD,
+// independent of the managed resource's own (OAS info.version-derived) version — mirrors oasgen's
+// resourceVersion constant (internal/controllers/restdefinition/restdefinition.go). The managed resource
+// and its Configuration sibling are separate kinds in the same group that can legitimately sit at
+// different versions, so the Configuration GVK must never inherit the managed resource's version.
+const configurationVersion = "v1alpha1"
+
 // Pagination defines the pagination strategy for a "findby" action.
 // Currently, only 'continuationToken' is supported.
 type Pagination struct {
@@ -515,6 +522,7 @@ func (g *dynamicGetter) processConfigurationRef(un *unstructured.Unstructured, i
 
 	gvk := un.GroupVersionKind()
 	gvk.Kind = fmt.Sprintf("%sConfiguration", gvk.Kind) // e.g., "WorkflowConfiguration"
+	gvk.Version = configurationVersion
 
 	gvr, err := g.pluralizer.GVKtoGVR(gvk)
 	if err != nil {

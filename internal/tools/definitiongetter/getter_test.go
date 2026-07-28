@@ -99,7 +99,7 @@ func TestDynamicGetter_Get(t *testing.T) {
 			},
 			configs: []runtime.Object{
 				&unstructured.Unstructured{Object: map[string]interface{}{
-					"apiVersion": "test.io/v1",
+					"apiVersion": "test.io/v1alpha1",
 					"kind":       "TestResourceConfiguration",
 					"metadata":   map[string]interface{}{"name": "test-config", "namespace": "default"},
 					"spec": map[string]interface{}{
@@ -122,8 +122,8 @@ func TestDynamicGetter_Get(t *testing.T) {
 			setupMocks: func(m *mockPluralizerInterface) {
 				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "TestResource"}).
 					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "testresources"}, nil)
-				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "TestResourceConfiguration"}).
-					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "testresourceconfigurations"}, nil)
+				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1alpha1", Kind: "TestResourceConfiguration"}).
+					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1alpha1", Resource: "testresourceconfigurations"}, nil)
 			},
 			wantErr: false,
 			validateResult: func(t *testing.T, info *Info) {
@@ -132,6 +132,68 @@ func TestDynamicGetter_Get(t *testing.T) {
 				req, _ := http.NewRequest("GET", "http://example.com", nil)
 				info.SetAuth(req)
 				assert.Equal(t, "Bearer test-token", req.Header.Get("Authorization"))
+			},
+		},
+		{
+			// Regression test for issue #32: the Configuration GVK must stay at its fixed
+			// v1alpha1 version even when the managed resource itself is at a different,
+			// OAS info.version-derived version (here "v2") — a multi-version API group is
+			// the normal, expected shape once oasgen derives a resource's version from the
+			// OAS, and the Configuration sibling kind must not inherit it.
+			name: "successful retrieval when the managed resource version differs from the fixed Configuration version",
+			unstructured: &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "test.io/v2",
+				"kind":       "TestResource",
+				"metadata":   map[string]interface{}{"name": "test-resource-instance", "namespace": "default"},
+				"spec":       map[string]interface{}{"configurationRef": map[string]interface{}{"name": "test-config-v2"}},
+			}},
+			definitions: []runtime.Object{
+				&unstructured.Unstructured{Object: map[string]interface{}{
+					"apiVersion": "ogen.krateo.io/v1alpha1",
+					"kind":       "RestDefinition",
+					"metadata":   map[string]interface{}{"name": "test-def"},
+					"spec": map[string]interface{}{
+						"resourceGroup": "test.io",
+						"oasPath":       "/api/v2/oas.yaml",
+						"resource":      map[string]interface{}{"kind": "TestResource"},
+					},
+				}},
+			},
+			configs: []runtime.Object{
+				&unstructured.Unstructured{Object: map[string]interface{}{
+					"apiVersion": "test.io/v1alpha1",
+					"kind":       "TestResourceConfiguration",
+					"metadata":   map[string]interface{}{"name": "test-config-v2", "namespace": "default"},
+					"spec": map[string]interface{}{
+						"authentication": map[string]interface{}{
+							"bearer": map[string]interface{}{
+								"tokenRef": map[string]interface{}{"name": "token-secret-v2", "namespace": "default", "key": "token"},
+							},
+						},
+					},
+				}},
+			},
+			secrets: []runtime.Object{
+				&unstructured.Unstructured{Object: map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Secret",
+					"metadata":   map[string]interface{}{"name": "token-secret-v2", "namespace": "default"},
+					"data":       map[string]interface{}{"token": base64.StdEncoding.EncodeToString([]byte("test-token-v2"))},
+				}},
+			},
+			setupMocks: func(m *mockPluralizerInterface) {
+				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v2", Kind: "TestResource"}).
+					Return(schema.GroupVersionResource{Group: "test.io", Version: "v2", Resource: "testresources"}, nil)
+				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1alpha1", Kind: "TestResourceConfiguration"}).
+					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1alpha1", Resource: "testresourceconfigurations"}, nil)
+			},
+			wantErr: false,
+			validateResult: func(t *testing.T, info *Info) {
+				assert.NotNil(t, info)
+				assert.NotNil(t, info.SetAuth)
+				req, _ := http.NewRequest("GET", "http://example.com", nil)
+				info.SetAuth(req)
+				assert.Equal(t, "Bearer test-token-v2", req.Header.Get("Authorization"))
 			},
 		},
 		{
@@ -152,7 +214,7 @@ func TestDynamicGetter_Get(t *testing.T) {
 			},
 			configs: []runtime.Object{
 				&unstructured.Unstructured{Object: map[string]interface{}{
-					"apiVersion": "test.io/v1",
+					"apiVersion": "test.io/v1alpha1",
 					"kind":       "TestResourceConfiguration",
 					"metadata":   map[string]interface{}{"name": "test-config-basic", "namespace": "default"},
 					"spec": map[string]interface{}{
@@ -182,8 +244,8 @@ func TestDynamicGetter_Get(t *testing.T) {
 			setupMocks: func(m *mockPluralizerInterface) {
 				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "TestResource"}).
 					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "testresources"}, nil)
-				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "TestResourceConfiguration"}).
-					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "testresourceconfigurations"}, nil)
+				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1alpha1", Kind: "TestResourceConfiguration"}).
+					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1alpha1", Resource: "testresourceconfigurations"}, nil)
 			},
 			wantErr: false,
 			validateResult: func(t *testing.T, info *Info) {
@@ -220,7 +282,7 @@ func TestDynamicGetter_Get(t *testing.T) {
 			},
 			configs: []runtime.Object{
 				&unstructured.Unstructured{Object: map[string]interface{}{
-					"apiVersion": "test.io/v1",
+					"apiVersion": "test.io/v1alpha1",
 					"kind":       "TestResourceConfiguration",
 					"metadata":   map[string]interface{}{"name": "central-config", "namespace": "krateo-system"},
 					"spec": map[string]interface{}{
@@ -243,8 +305,8 @@ func TestDynamicGetter_Get(t *testing.T) {
 			setupMocks: func(m *mockPluralizerInterface) {
 				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "TestResource"}).
 					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "testresources"}, nil)
-				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "TestResourceConfiguration"}).
-					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "testresourceconfigurations"}, nil)
+				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1alpha1", Kind: "TestResourceConfiguration"}).
+					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1alpha1", Resource: "testresourceconfigurations"}, nil)
 			},
 			wantErr: false,
 			validateResult: func(t *testing.T, info *Info) {
@@ -297,8 +359,8 @@ func TestDynamicGetter_Get(t *testing.T) {
 			setupMocks: func(m *mockPluralizerInterface) {
 				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "TestResource"}).
 					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "testresources"}, nil)
-				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "TestResourceConfiguration"}).
-					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "testresourceconfigurations"}, nil)
+				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1alpha1", Kind: "TestResourceConfiguration"}).
+					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1alpha1", Resource: "testresourceconfigurations"}, nil)
 			},
 			wantErr:        true,
 			wantErrMessage: "testresourceconfigurations.test.io \"non-existent-config\" not found",
@@ -321,7 +383,7 @@ func TestDynamicGetter_Get(t *testing.T) {
 			},
 			configs: []runtime.Object{
 				&unstructured.Unstructured{Object: map[string]interface{}{
-					"apiVersion": "test.io/v1",
+					"apiVersion": "test.io/v1alpha1",
 					"kind":       "TestResourceConfiguration",
 					"metadata":   map[string]interface{}{"name": "test-config", "namespace": "default"},
 					"spec": map[string]interface{}{
@@ -344,8 +406,8 @@ func TestDynamicGetter_Get(t *testing.T) {
 			setupMocks: func(m *mockPluralizerInterface) {
 				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "TestResource"}).
 					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "testresources"}, nil)
-				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "TestResourceConfiguration"}).
-					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "testresourceconfigurations"}, nil)
+				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1alpha1", Kind: "TestResourceConfiguration"}).
+					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1alpha1", Resource: "testresourceconfigurations"}, nil)
 			},
 			wantErr:        true,
 			wantErrMessage: "key token not found in secret default/token-secret",
@@ -368,7 +430,7 @@ func TestDynamicGetter_Get(t *testing.T) {
 			},
 			configs: []runtime.Object{
 				&unstructured.Unstructured{Object: map[string]interface{}{
-					"apiVersion": "test.io/v1",
+					"apiVersion": "test.io/v1alpha1",
 					"kind":       "TestResourceConfiguration",
 					"metadata":   map[string]interface{}{"name": "test-config-unsupported", "namespace": "default"},
 					"spec": map[string]interface{}{
@@ -381,8 +443,8 @@ func TestDynamicGetter_Get(t *testing.T) {
 			setupMocks: func(m *mockPluralizerInterface) {
 				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "TestResource"}).
 					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "testresources"}, nil)
-				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "TestResourceConfiguration"}).
-					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "testresourceconfigurations"}, nil)
+				m.On("GVKtoGVR", schema.GroupVersionKind{Group: "test.io", Version: "v1alpha1", Kind: "TestResourceConfiguration"}).
+					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1alpha1", Resource: "testresourceconfigurations"}, nil)
 			},
 			wantErr:        true,
 			wantErrMessage: "unknown auth type: apiKey",
