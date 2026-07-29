@@ -1627,6 +1627,125 @@ func TestBuildCallConfig_FieldMappingKeepsUnmappedSiblings(t *testing.T) {
 	}
 }
 
+// TestBuildCallConfig_PredicateMappingIsOrderIndependent is the point of [?key=value]: the SAME field
+// mappings must land on the right credential no matter what order the CR lists them in. With positional
+// indices, reordering the CR silently writes the password into the OTP credential.
+func TestBuildCallConfig_PredicateMappingIsOrderIndependent(t *testing.T) {
+	newCI := func() *CallInfo {
+		return &CallInfo{
+			Path:   "/users",
+			Method: "POST",
+			ReqParams: &RequestedParams{
+				Body: text.StringSet{"credentials": {}, "username": {}},
+			},
+			FieldMapping: []getter.FieldMappingItem{
+				{InBody: "credentials[?type=password].value", InCustomResource: "spec.credentials[?type=password].pw"},
+				{InBody: "credentials[?type=otp].secretData", InCustomResource: "spec.credentials[?type=otp].seed"},
+			},
+		}
+	}
+	password := map[string]interface{}{"type": "password", "temporary": false, "pw": "pw-val"}
+	otp := map[string]interface{}{"type": "otp", "userLabel": "OTP", "credentialData": "{}", "seed": "seed-val"}
+
+	mgWith := func(creds ...interface{}) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]interface{}{
+			"spec": map[string]interface{}{"username": "alice", "credentials": creds},
+		}}
+	}
+
+	for _, tc := range []struct {
+		name  string
+		creds []interface{}
+	}{
+		{"password first", []interface{}{password, otp}},
+		{"otp first", []interface{}{otp, password}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := BuildCallConfig(newCI(), mgWith(tc.creds...), nil, nil)
+
+			creds, ok := got.Body.(map[string]interface{})["credentials"].([]interface{})
+			if !ok || len(creds) != 2 {
+				t.Fatalf("expected 2 credentials in body, got %#v", got.Body.(map[string]interface{})["credentials"])
+			}
+
+			byType := map[string]map[string]interface{}{}
+			for _, c := range creds {
+				m := c.(map[string]interface{})
+				byType[m["type"].(string)] = m
+			}
+
+			if byType["password"]["value"] != "pw-val" {
+				t.Errorf("password credential: want value=pw-val, got %#v", byType["password"])
+			}
+			if _, leaked := byType["otp"]["value"]; leaked {
+				t.Errorf("password value written into the otp credential: %#v", byType["otp"])
+			}
+			if byType["otp"]["secretData"] != "seed-val" {
+				t.Errorf("otp credential: want secretData=seed-val, got %#v", byType["otp"])
+			}
+			if _, leaked := byType["password"]["secretData"]; leaked {
+				t.Errorf("otp secretData written into the password credential: %#v", byType["password"])
+			}
+			// Unmapped siblings survive, exactly as in the positional case.
+			if byType["password"]["temporary"] != false || byType["otp"]["credentialData"] != "{}" {
+				t.Errorf("unmapped siblings dropped: %#v", byType)
+			}
+		})
+	}
+}
+
+// TestBuildCallConfig_PredicateResolverWritesResolvedSecret pins the real Keycloak wiring: a secretRef
+// resolver whose body path is a predicate writes the RESOLVED secret value into the matching credential
+// and strips the {name,key} ref that only exists to point at the Secret.
+func TestBuildCallConfig_PredicateResolverWritesResolvedSecret(t *testing.T) {
+	mapping := getter.FieldMappingItem{
+		InBody:           "credentials[?type=password].value",
+		InCustomResource: "spec.credentials[?type=password].valueSecretRef",
+		Resolver: &getter.FieldResolver{
+			Type: "secretRef",
+			SecretRef: &getter.SecretRefResolver{
+				NameFromCustomResource: "spec.credentials[?type=password].valueSecretRef.name",
+				KeyFromCustomResource:  "spec.credentials[?type=password].valueSecretRef.key",
+			},
+		},
+	}
+	ci := &CallInfo{
+		Path:   "/users",
+		Method: "POST",
+		ReqParams: &RequestedParams{
+			Body: text.StringSet{"credentials": {}, "username": {}},
+		},
+		FieldMapping: []getter.FieldMappingItem{mapping},
+	}
+	mg := &unstructured.Unstructured{Object: map[string]interface{}{
+		"spec": map[string]interface{}{
+			"username": "alice",
+			"credentials": []interface{}{
+				map[string]interface{}{"type": "otp", "credentialData": "{}"},
+				map[string]interface{}{"type": "password", "valueSecretRef": map[string]interface{}{"name": "s", "key": "pw"}},
+			},
+		},
+	}}
+	resolved := map[string]interface{}{fieldmapping.ResolverKey(mapping): "hunter2"}
+
+	got := BuildCallConfig(ci, mg, nil, resolved)
+
+	creds := got.Body.(map[string]interface{})["credentials"].([]interface{})
+	pw := creds[1].(map[string]interface{})
+	if pw["type"] != "password" {
+		t.Fatalf("expected the password credential at index 1, got %#v", pw)
+	}
+	if pw["value"] != "hunter2" {
+		t.Errorf("resolved secret not written: %#v", pw)
+	}
+	if _, still := pw["valueSecretRef"]; still {
+		t.Errorf("resolver source not stripped from the body: %#v", pw)
+	}
+	if _, leaked := creds[0].(map[string]interface{})["value"]; leaked {
+		t.Errorf("secret written into the otp credential: %#v", creds[0])
+	}
+}
+
 func TestBuildCallConfig_SuccessCodesPropagated(t *testing.T) {
 	ci := &CallInfo{
 		Path:         "/test/{id}",

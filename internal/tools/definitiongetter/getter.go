@@ -98,6 +98,10 @@ type RequestFieldMappingItem struct {
 // FieldMappingItem is the runtime mirror of the RestDefinition FieldMappingItem (unified request/response
 // mapping). Exactly one API-side anchor is set: inPath/inQuery/inBody select a request parameter,
 // inResponse selects a response body field to be normalized into the CR-domain shape.
+//
+// Every path here is parsed by internal/tools/pathparsing, so besides dot and quoted-bracket notation it
+// also addresses array elements — by position ("credentials[0].value") or, shape-independently, by content
+// with a predicate ("credentials[?type=password].value").
 type FieldMappingItem struct {
 	InPath           string        `json:"inPath,omitempty"`
 	InQuery          string        `json:"inQuery,omitempty"`

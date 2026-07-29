@@ -3,6 +3,7 @@ package pathparsing
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // isArrayIndex reports whether segment is a valid non-negative array index (e.g. "0", "12"). A redundant
@@ -27,6 +28,52 @@ func isArrayIndex(segment string) (int, bool) {
 	return idx, true
 }
 
+// parsePredicate reports whether segment is a [?key=value] predicate and, if so, returns its key and
+// expected value. Predicates arrive from ParsePath with the leading '?' intact.
+func parsePredicate(segment string) (key, want string, ok bool) {
+	if !strings.HasPrefix(segment, "?") {
+		return "", "", false
+	}
+	k, v, found := strings.Cut(segment[1:], "=")
+	if !found || k == "" {
+		return "", "", false
+	}
+	return k, v, true
+}
+
+// matchPredicate resolves a [?key=value] predicate against a slice, returning the index of the single
+// matching element. Comparison is by string form, so a predicate matches whether the document holds
+// "2", 2 or 2.0 — API bodies round-trip through JSON with inconsistent numeric typing and a
+// type-sensitive match would fail for reasons the author cannot see in the YAML.
+//
+// Ambiguity is an ERROR, never "take the first": silently picking one of several matches is exactly the
+// wrong-element bug that predicates exist to eliminate. found=false means no match, which callers treat
+// as absent (read) or as a hard error (write).
+func matchPredicate(items []interface{}, key, want string) (idx int, found bool, err error) {
+	hit := -1
+	for i, it := range items {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue // a scalar element cannot satisfy a field predicate
+		}
+		v, present := m[key]
+		if !present {
+			continue
+		}
+		if fmt.Sprintf("%v", v) != want {
+			continue
+		}
+		if hit >= 0 {
+			return 0, false, fmt.Errorf("predicate [?%s=%s] matches more than one element (indices %d and %d); it must select exactly one", key, want, hit, i)
+		}
+		hit = i
+	}
+	if hit < 0 {
+		return 0, false, nil
+	}
+	return hit, true, nil
+}
+
 // GetNestedField reads the value at the given path segments from obj, which may nest through both
 // map[string]interface{} and []interface{} — a segment indexes into whichever the current container
 // actually is: an array index (parsed via isArrayIndex) into a slice, a map key everywhere else. Mirrors
@@ -42,9 +89,20 @@ func GetNestedField(obj interface{}, segments []string) (interface{}, bool, erro
 			}
 			cur = val
 		case []interface{}:
+			if key, want, isPred := parsePredicate(seg); isPred {
+				pi, hit, perr := matchPredicate(c, key, want)
+				if perr != nil {
+					return nil, false, fmt.Errorf("path segment %q at position %d: %w", seg, i, perr)
+				}
+				if !hit {
+					return nil, false, nil
+				}
+				cur = c[pi]
+				continue
+			}
 			idx, ok := isArrayIndex(seg)
 			if !ok {
-				return nil, false, fmt.Errorf("path segment %q at position %d: array requires a non-negative integer index", seg, i)
+				return nil, false, fmt.Errorf("path segment %q at position %d: array requires a non-negative integer index or a [?key=value] predicate", seg, i)
 			}
 			if idx < 0 || idx >= len(c) {
 				return nil, false, nil
@@ -93,12 +151,30 @@ func setNested(container interface{}, value interface{}, segments []string) (int
 		return c, nil
 
 	case []interface{}:
-		idx, ok := isArrayIndex(seg)
-		if !ok {
-			return nil, fmt.Errorf("path segment %q: expected a non-negative integer index into an array", seg)
-		}
-		for idx >= len(c) {
-			c = append(c, nil)
+		var idx int
+		if key, want, isPred := parsePredicate(seg); isPred {
+			// A predicate selects an EXISTING element; unlike an index it cannot auto-vivify, because
+			// {key: want} alone is not a usable element (the rest of its fields are unknown) and
+			// inventing one would append a half-formed entry to the outgoing body. No match is
+			// therefore a hard error rather than a silent create — the write was aimed at something
+			// the document does not contain, and dropping it would send an incomplete request.
+			pi, hit, perr := matchPredicate(c, key, want)
+			if perr != nil {
+				return nil, fmt.Errorf("path segment %q: %w", seg, perr)
+			}
+			if !hit {
+				return nil, fmt.Errorf("path segment %q: no array element matches; a predicate can only address an element that already exists", seg)
+			}
+			idx = pi
+		} else {
+			var ok bool
+			idx, ok = isArrayIndex(seg)
+			if !ok {
+				return nil, fmt.Errorf("path segment %q: expected a non-negative integer index or a [?key=value] predicate into an array", seg)
+			}
+			for idx >= len(c) {
+				c = append(c, nil)
+			}
 		}
 		if len(rest) == 0 {
 			c[idx] = value
@@ -124,7 +200,7 @@ func setNested(container interface{}, value interface{}, segments []string) (int
 // for nextSegment, so an existing, correctly-shaped container along the path is reused rather than
 // discarded.
 func containerMatches(v interface{}, nextSegment string) bool {
-	_, wantIndex := isArrayIndex(nextSegment)
+	wantIndex := segmentWantsArray(nextSegment)
 	switch v.(type) {
 	case map[string]interface{}:
 		return !wantIndex
@@ -136,10 +212,21 @@ func containerMatches(v interface{}, nextSegment string) bool {
 }
 
 func newContainerFor(nextSegment string) interface{} {
-	if _, ok := isArrayIndex(nextSegment); ok {
+	if segmentWantsArray(nextSegment) {
 		return []interface{}{}
 	}
 	return map[string]interface{}{}
+}
+
+// segmentWantsArray reports whether a segment can only address an array: a numeric index, or a
+// [?key=value] predicate. Both imply the container must be a slice — getting this wrong for predicates
+// would have newContainerFor build a map and then fail to traverse it.
+func segmentWantsArray(segment string) bool {
+	if _, ok := isArrayIndex(segment); ok {
+		return true
+	}
+	_, _, isPred := parsePredicate(segment)
+	return isPred
 }
 
 // RemoveNestedField deletes the value at the path formed by segments from obj, if present — a no-op if any
@@ -173,9 +260,22 @@ func removeNested(container interface{}, segments []string) interface{} {
 		return c
 
 	case []interface{}:
-		idx, ok := isArrayIndex(seg)
-		if !ok || idx < 0 || idx >= len(c) {
-			return c
+		var idx int
+		if key, want, isPred := parsePredicate(seg); isPred {
+			// Removal is best-effort by contract, so an ambiguous or unmatched predicate is a no-op
+			// rather than an error — the caller is deleting something that, by this path, is not
+			// uniquely there.
+			pi, hit, perr := matchPredicate(c, key, want)
+			if perr != nil || !hit {
+				return c
+			}
+			idx = pi
+		} else {
+			var ok bool
+			idx, ok = isArrayIndex(seg)
+			if !ok || idx < 0 || idx >= len(c) {
+				return c
+			}
 		}
 		if len(rest) == 0 {
 			return append(c[:idx], c[idx+1:]...)

@@ -143,14 +143,6 @@ func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSp
 		}
 	}
 
-	// 2. Apply explicit request field mappings (deprecated RequestFieldMapping).
-	applyRequestFieldMapping(callInfo, mg, reqConfiguration, mapBody)
-
-	// 2b. Apply the unified FieldMapping's request-direction entries (inPath/inQuery/inBody). Runs before
-	// spec/status auto-population (steps 3/4 below) so an explicit mapping always wins over a same-named
-	// field the resource happens to carry, matching step 2's precedence.
-	applyFieldMapping(callInfo, mg, reqConfiguration, mapBody, resolved)
-
 	specFields, err := unstructuredtools.GetFieldsFromUnstructured(mg, "spec")
 	if err != nil {
 		specFields = make(map[string]interface{}) // Initialize as empty map if error when retrieving spec
@@ -173,7 +165,18 @@ func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSp
 	// 4. Apply values from the main resource's status
 	processFields(callInfo, statusFields, reqConfiguration, mapBody)
 
-	// 4b. Drop the CR-side source of every Resolver entry from the body. A resolver's
+	// 5. Apply explicit field mappings LAST, so they win by write order.
+	//
+	// These used to run before auto-population, with processFields underlaying the spec beneath what was
+	// written. Ordering them last is equivalent for precedence and strictly better for addressing: a
+	// [?key=value] predicate can only resolve against an array that already exists, and before
+	// auto-population the body is empty, so every predicate write would fail. Populating first also
+	// removes the need to merge, since a later write simply overwrites the specific path it targets and
+	// leaves every sibling that processFields put there untouched.
+	applyRequestFieldMapping(callInfo, mg, reqConfiguration, mapBody) // deprecated RequestFieldMapping
+	applyFieldMapping(callInfo, mg, reqConfiguration, mapBody, resolved)
+
+	// 6. Drop the CR-side source of every Resolver entry from the body. A resolver's
 	// inCustomResource is a POINTER the controller dereferences (a secretRef's {name,key}, an
 	// a secretRef's {name,key}) — the dereferenced result is already written at the entry's inBody, so the
 	// pointer itself is CR-domain plumbing that no API expects. Auto-population (step 3) cannot know
@@ -418,13 +421,11 @@ func processFields(callInfo *CallInfo, fields map[string]interface{}, reqConfigu
 		// Therefore, we do not set them here since we are processing only the main resource fields (spec/status) with this function.
 
 		if callInfo.ReqParams.Body.Contains(field) {
-			// FieldMapping runs before auto-population and must win — but only for the exact paths it
-			// wrote, not for the whole top-level field. Skipping the field wholesale (the previous
-			// behaviour) silently dropped every sibling the CR declared under it: a mapping onto
-			// `credentials.0.value` discarded that credential's `type`/`temporary` and the entire
-			// second credential, so the request went out structurally incomplete. Underlay the spec
-			// value instead, so mapped paths keep their mapped values and everything else is filled in.
-			mapBody[field] = underlaySpecValue(value, mapBody[field])
+			// Nil-guard so spec (processed first) beats status. FieldMapping precedence is NOT handled
+			// here — it comes from those mappings being applied after this, in BuildCallConfig.
+			if mapBody[field] == nil {
+				mapBody[field] = value
+			}
 		}
 	}
 }
@@ -444,48 +445,5 @@ func stripResolverSources(callInfo *CallInfo, mapBody map[string]interface{}) {
 			continue
 		}
 		pathparsing.RemoveNestedField(mapBody, segs)
-	}
-}
-
-// underlaySpecValue returns `written` (what fieldMapping produced) with `spec` filled in wherever
-// `written` does not already define a value. `written` always wins on conflict, at whatever depth the
-// conflict occurs; a nil `written` (including a gap left by array auto-vivification, e.g. mapping only
-// index 1) yields the spec value outright. Maps merge key-wise and arrays element-wise by index, with
-// spec elements past the end of `written` appended, so a mapping that touches one element never drops
-// the others.
-func underlaySpecValue(spec, written interface{}) interface{} {
-	if written == nil {
-		return spec
-	}
-	switch w := written.(type) {
-	case map[string]interface{}:
-		s, ok := spec.(map[string]interface{})
-		if !ok {
-			return written // shape disagreement: the mapped value is authoritative
-		}
-		for k, sv := range s {
-			if wv, exists := w[k]; exists {
-				w[k] = underlaySpecValue(sv, wv)
-			} else {
-				w[k] = sv
-			}
-		}
-		return w
-	case []interface{}:
-		s, ok := spec.([]interface{})
-		if !ok {
-			return written
-		}
-		for i := range w {
-			if i < len(s) {
-				w[i] = underlaySpecValue(s[i], w[i])
-			}
-		}
-		for i := len(w); i < len(s); i++ {
-			w = append(w, s[i])
-		}
-		return w
-	default:
-		return written // scalar written by fieldMapping wins outright
 	}
 }

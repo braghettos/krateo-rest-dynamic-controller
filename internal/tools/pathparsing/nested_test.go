@@ -215,3 +215,102 @@ func TestRemoveNestedField(t *testing.T) {
 		assert.Equal(t, map[string]interface{}{"a": "b"}, obj)
 	})
 }
+
+// TestPredicate_ShapeIndependentAddressing covers [?key=value]: addressing an array element by CONTENT
+// instead of position. The motivating case is Keycloak credentials — credentials[0] silently targets the
+// wrong element if the order changes, whereas [?type=password] does not.
+func TestPredicate_ShapeIndependentAddressing(t *testing.T) {
+	doc := func() map[string]interface{} {
+		return map[string]interface{}{
+			"credentials": []interface{}{
+				map[string]interface{}{"type": "otp", "secretDataRef": map[string]interface{}{"name": "s", "key": "otpseed"}},
+				map[string]interface{}{"type": "password", "valueRef": map[string]interface{}{"name": "s", "key": "pw"}},
+			},
+		}
+	}
+
+	t.Run("parses to a predicate segment", func(t *testing.T) {
+		segs, err := ParsePath("credentials[?type=password].valueRef.key")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"credentials", "?type=password", "valueRef", "key"}, segs)
+	})
+
+	t.Run("reads the matching element regardless of position", func(t *testing.T) {
+		// password is at index 1 here; the predicate must not care.
+		segs, _ := ParsePath("credentials[?type=password].valueRef.key")
+		v, found, err := GetNestedField(doc(), segs)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "pw", v)
+
+		segs, _ = ParsePath("credentials[?type=otp].secretDataRef.key")
+		v, found, err = GetNestedField(doc(), segs)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "otpseed", v)
+	})
+
+	t.Run("writes into the matching element", func(t *testing.T) {
+		d := doc()
+		segs, _ := ParsePath("credentials[?type=password].value")
+		require.NoError(t, SetNestedField(d, "hunter2", segs))
+		creds := d["credentials"].([]interface{})
+		assert.Equal(t, "hunter2", creds[1].(map[string]interface{})["value"], "must write element 1, the password one")
+		_, wrote0 := creds[0].(map[string]interface{})["value"]
+		assert.False(t, wrote0, "must not touch the otp element")
+	})
+
+	t.Run("no match on write is a hard error, never a silent append", func(t *testing.T) {
+		d := doc()
+		segs, _ := ParsePath("credentials[?type=webauthn].value")
+		err := SetNestedField(d, "x", segs)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no array element matches")
+		assert.Len(t, d["credentials"].([]interface{}), 2, "must not have appended a half-formed element")
+	})
+
+	t.Run("no match on read is simply absent", func(t *testing.T) {
+		segs, _ := ParsePath("credentials[?type=webauthn].value")
+		_, found, err := GetNestedField(doc(), segs)
+		require.NoError(t, err)
+		assert.False(t, found)
+	})
+
+	t.Run("ambiguity is an error, not first-wins", func(t *testing.T) {
+		d := map[string]interface{}{"c": []interface{}{
+			map[string]interface{}{"type": "password", "v": "a"},
+			map[string]interface{}{"type": "password", "v": "b"},
+		}}
+		segs, _ := ParsePath("c[?type=password].v")
+		_, _, err := GetNestedField(d, segs)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "more than one element")
+	})
+
+	t.Run("matches across JSON numeric typing", func(t *testing.T) {
+		d := map[string]interface{}{"c": []interface{}{
+			map[string]interface{}{"prio": float64(2), "v": "hit"},
+		}}
+		segs, _ := ParsePath("c[?prio=2].v")
+		v, found, err := GetNestedField(d, segs)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "hit", v, "float64(2) from JSON must satisfy [?prio=2]")
+	})
+
+	t.Run("removes the matching element", func(t *testing.T) {
+		d := doc()
+		segs, _ := ParsePath("credentials[?type=otp]")
+		RemoveNestedField(d, segs)
+		creds := d["credentials"].([]interface{})
+		require.Len(t, creds, 1)
+		assert.Equal(t, "password", creds[0].(map[string]interface{})["type"])
+	})
+
+	t.Run("malformed predicate is rejected at parse time", func(t *testing.T) {
+		for _, bad := range []string{"c[?nokey]", "c[?=value]"} {
+			_, err := ParsePath(bad)
+			require.Errorf(t, err, "expected %q to be rejected", bad)
+		}
+	})
+}

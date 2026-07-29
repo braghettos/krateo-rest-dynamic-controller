@@ -192,6 +192,25 @@ func parseBracketContent(rest string) (string, error) {
 		return inner, nil
 	}
 
+	// A predicate selects an array element by CONTENT rather than position: [?key=value] matches the
+	// element whose `key` field equals `value`. This is what makes a path shape-independent — e.g.
+	// credentials[?type=password].value addresses the password credential wherever it sits, instead of
+	// hard-coding credentials[0] and silently targeting the wrong element if the order changes. Kept
+	// verbatim (leading '?') as the segment; GetNestedField/SetNestedField interpret it.
+	//
+	// Caveat, deliberate: a map key that literally begins with '?' is therefore not addressable, not even
+	// via the quoted form, since the quoted form yields its inner content and would be indistinguishable.
+	// No such key occurs in a JSON/YAML API body in practice, and the alternative (an out-of-band marker)
+	// would leak into every []string segment consumer for no real gain.
+	if strings.HasPrefix(inner, "?") {
+		k, v, found := strings.Cut(inner[1:], "=")
+		if !found || k == "" {
+			return "", fmt.Errorf("malformed path: predicate must be [?key=value]")
+		}
+		_ = v // an empty value is legal: [?foo=] matches elements whose foo is ""
+		return inner, nil
+	}
+
 	if len(inner) < 2 {
 		return "", fmt.Errorf("malformed path: bracket must contain quoted string")
 	}
