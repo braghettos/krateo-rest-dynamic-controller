@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
 	customcondition "github.com/krateoplatformops/rest-dynamic-controller/internal/controllers/condition"
@@ -29,10 +30,6 @@ import (
 )
 
 var _ controller.ExternalClient = (*handler)(nil)
-
-var (
-	ErrStatusNotFound = errors.New("status not found")
-)
 
 // Event reasons emitted on the reconciled dynamic CR.
 const (
@@ -801,23 +798,6 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		return nil
 	}
 
-	_, err = unstructuredtools.GetFieldsFromUnstructured(mg, "status")
-	if err == ErrStatusNotFound {
-		log.Debug("External resource not created yet", "kind", mg.GetKind())
-		log.Debug("Remote resource is assumed to not exist, deleting CR")
-		err = unstructuredtools.SetConditions(mg, condition.Deleting())
-		if err != nil {
-			log.Warn("Setting condition", "error", err)
-		}
-		if derr := h.deleteSecretRefRBAC(ctx, mg); derr != nil {
-			log.Warn("secretRef RBAC teardown failed, continuing", "error", derr)
-		}
-		return nil
-	}
-	if err != nil {
-		log.Error(err, "Getting status")
-		return err
-	}
 	apiCall, callInfo, err := builder.APICallBuilder(cli, clientInfo, apiaction.Delete)
 	if err != nil {
 		log.Error(err, "Building API call")
@@ -833,16 +813,43 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 
 	// expectExisting=false: the Role may or may not exist yet (e.g. a CR deleted without ever having gone
 	// through Update), and either way EnsureSecretRole's create-or-update is correct here.
+	//
+	// A failure here is a WARNING on the delete path, not a hard stop. Resolver sources live on the CR's
+	// spec, and a CR that never created successfully routinely carries a spec the resolvers cannot read —
+	// making this fatal would hold the finalizer for a resource that does not exist. Whether the resource
+	// is still addressable is decided below, from the path parameters; if it is, the delete proceeds
+	// without the unresolved values, which for a delete request are almost never part of the call.
 	resolved, err := h.ensureSecretRefRBACAndResolve(ctx, clientInfo, callInfo.FieldMapping, mg, false)
 	if err != nil {
-		log.Error(err, "Provisioning secretRef RBAC / resolving field mapping resolvers")
-		return err
+		log.Warn("Provisioning secretRef RBAC / resolving field mapping resolvers, continuing", "error", err)
+		resolved = nil
 	}
 
 	reqConfiguration := builder.BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec, resolved)
 	if reqConfiguration == nil {
 		log.Error(fmt.Errorf("error building call configuration"), "Building call configuration")
 		return fmt.Errorf("building call configuration")
+	}
+
+	// If the delete path still has unpopulated {placeholder}s, the external resource is not addressable —
+	// typically because the create never succeeded, so no identifier was ever written to status. Sending the
+	// request is impossible (it is rejected before it leaves, "missing path parameter: id"), and returning
+	// that error would hold the finalizer on EVERY retry: the CR would sit in Deleting forever and block its
+	// namespace with it. Release the finalizer instead.
+	//
+	// Warn rather than debug: the identifier can also go missing on a resource that DOES exist (e.g. status
+	// was lost), and that case orphans the external resource. Holding the finalizer would not save it —
+	// nothing can re-derive the identifier — so the operator needs to see it, not be blocked by it.
+	if missing := builder.UnresolvedPathParams(callInfo.Path, reqConfiguration.Parameters); len(missing) > 0 {
+		log.Warn("External resource is not addressable, releasing finalizer without calling the API",
+			"kind", mg.GetKind(), "path", callInfo.Path, "unresolvedPathParams", strings.Join(missing, ","))
+		if serr := unstructuredtools.SetConditions(mg, condition.Deleting()); serr != nil {
+			log.Warn("Setting condition", "error", serr)
+		}
+		if derr := h.deleteSecretRefRBAC(ctx, mg); derr != nil {
+			log.Warn("secretRef RBAC teardown failed, continuing", "error", derr)
+		}
+		return nil
 	}
 
 	response, err := apiCall(ctx, &http.Client{}, callInfo.Path, reqConfiguration)

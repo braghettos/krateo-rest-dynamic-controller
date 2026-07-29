@@ -32,6 +32,7 @@ import (
 	"github.com/krateoplatformops/plumbing/e2e"
 	xenv "github.com/krateoplatformops/plumbing/env"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
@@ -575,6 +576,33 @@ func TestController(t *testing.T) {
 				}
 			}
 
+			return ctx
+		}).
+		// A CR whose create never succeeded has no identifier in status, so the delete path /resource/{id}
+		// cannot be built at all. Delete must still release the finalizer: returning the "missing path
+		// parameter" error instead strands the CR in Deleting forever, and its namespace with it.
+		Assess("DeleteNeverCreated", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			u := &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "sample.krateo.io/v1alpha1",
+				"kind":       "Sample",
+				"metadata": map[string]interface{}{
+					"name":      "sample-never-created",
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"name":        "sample-never-created",
+					"description": "create never succeeded, so status.id was never written",
+					"configurationRef": map[string]interface{}{
+						"name":      "my-sample-config",
+						"namespace": namespace,
+					},
+				},
+				// Deliberately no "status": this is the post-failed-create shape.
+			}}
+
+			if err := handler.Delete(ctx, u); err != nil {
+				t.Error("Delete of a never-created resource must release the finalizer, got error", "error", err)
+			}
 			return ctx
 		}).Feature()
 

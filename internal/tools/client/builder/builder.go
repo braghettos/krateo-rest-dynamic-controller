@@ -109,6 +109,33 @@ func APICallBuilder(cli restclient.UnstructuredClientInterface, info *getter.Inf
 // (secretRef) needs I/O this synchronous function cannot perform itself. Pass nil at
 // call sites that don't resolve resolvers (e.g. the async/observe paths) — a resolver-bearing entry is
 // then simply skipped rather than sent unresolved.
+// UnresolvedPathParams returns, in order of appearance, the names of the {placeholder} segments in a path
+// template that params does not populate — treating an empty value as unpopulated, since substituting it
+// would silently address a different URL (".../users/" rather than ".../users/{id}").
+//
+// A non-empty result means the external resource is NOT ADDRESSABLE: the request cannot be aimed at
+// anything, so sending it is pointless. Callers use this to distinguish "the call would fail" from "the
+// call failed", which matters most on delete — a CR whose create never succeeded has no identifier in its
+// status, and blocking its teardown on a request that can never be built strands the CR forever.
+func UnresolvedPathParams(path string, params map[string]string) []string {
+	var missing []string
+	for i := 0; i < len(path); i++ {
+		if path[i] != '{' {
+			continue
+		}
+		end := strings.IndexByte(path[i:], '}')
+		if end < 0 {
+			break // unterminated placeholder: nothing addressable to report beyond this point
+		}
+		name := path[i+1 : i+end]
+		if name != "" && params[name] == "" {
+			missing = append(missing, name)
+		}
+		i += end
+	}
+	return missing
+}
+
 func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSpec map[string]interface{}, resolved map[string]interface{}) *restclient.RequestConfiguration {
 	if callInfo == nil || mg == nil {
 		return nil
