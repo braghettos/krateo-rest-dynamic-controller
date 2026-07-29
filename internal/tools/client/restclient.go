@@ -532,7 +532,7 @@ func (u *UnstructuredClient) CallForPagination(ctx context.Context, cli *http.Cl
 // 3. A single object, for endpoints that don't use an array for single-item results: `{"id": 1}` (e.g. when the collection only has one item at the moment)
 //
 // It is a free function (not a method) because it does not depend on any UnstructuredClient state — this
-// lets other packages (e.g. builder's apiLookup resolver) reuse the same list-normalization logic FindBy
+// lets other packages reuse the same list-normalization logic FindBy
 // uses, without needing a client instance.
 func ExtractItemsFromResponse(body interface{}) ([]interface{}, error) {
 	// Case 1: The body is already a standard list (JSON array).

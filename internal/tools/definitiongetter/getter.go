@@ -114,23 +114,11 @@ type FieldMappingItem struct {
 	DefaultIfAbsent json.RawMessage `json:"defaultIfAbsent,omitempty"`
 }
 
-// FieldResolver is the shared primitive behind #30 (apiLookup) and #31 (secretRef): exactly one of
-// ApiLookup/SecretRef is set, matching Type.
+// FieldResolver is the runtime mirror of the RestDefinition FieldResolver (issue #31). secretRef is the
+// only kind; an apiLookup kind shipped in 0.12.0 and was removed in 0.15.0 (see oasgen's types.go).
 type FieldResolver struct {
 	Type      string             `json:"type"`
-	ApiLookup *APILookupResolver `json:"apiLookup,omitempty"`
 	SecretRef *SecretRefResolver `json:"secretRef,omitempty"`
-}
-
-// APILookupResolver resolves a Custom Resource alias into an id via a call in the SAME RestDefinition's
-// OAS document (decision: no cross-RestDefinition lookup).
-type APILookupResolver struct {
-	// Action is a VerbsDescription.Action in this RestDefinition (e.g. "findby").
-	Action string `json:"action"`
-	// RequestParam is the path/query param on the lookup call that receives the alias.
-	RequestParam string `json:"requestParam"`
-	// ResponsePath is a JSONPath into the lookup response for the resolved value.
-	ResponsePath string `json:"responsePath"`
 }
 
 // SecretRefResolver substitutes a Kubernetes Secret's value for the field. There is no namespace field:

@@ -106,7 +106,7 @@ func APICallBuilder(cli restclient.UnstructuredClientInterface, info *getter.Inf
 //
 // resolved carries the values already produced by fieldmapping.ResolveRequestResolvers for this same
 // callInfo.FieldMapping slice (keyed by fieldmapping.ResolverKey), for FieldMapping entries whose Resolver
-// (secretRef/apiLookup) needs network I/O this synchronous function cannot perform itself. Pass nil at
+// (secretRef) needs I/O this synchronous function cannot perform itself. Pass nil at
 // call sites that don't resolve resolvers (e.g. the async/observe paths) — a resolver-bearing entry is
 // then simply skipped rather than sent unresolved.
 func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSpec map[string]interface{}, resolved map[string]interface{}) *restclient.RequestConfiguration {
@@ -175,7 +175,7 @@ func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSp
 
 	// 4b. Drop the CR-side source of every Resolver entry from the body. A resolver's
 	// inCustomResource is a POINTER the controller dereferences (a secretRef's {name,key}, an
-	// apiLookup's alias) — the dereferenced result is already written at the entry's inBody, so the
+	// a secretRef's {name,key}) — the dereferenced result is already written at the entry's inBody, so the
 	// pointer itself is CR-domain plumbing that no API expects. Auto-population (step 3) cannot know
 	// that and would forward it verbatim, which strict APIs reject outright: Keycloak answers 400 to a
 	// CredentialRepresentation carrying an unknown `valueSecretRef`. Only Resolver entries are
@@ -272,7 +272,7 @@ func applyRequestFieldMapping(callInfo *CallInfo, mg *unstructured.Unstructured,
 // applyFieldMapping populates the request configuration from the unified FieldMapping's request-direction
 // entries (inPath/inQuery/inBody set; inResponse-only entries are for the response side and are ignored
 // here). It mirrors applyRequestFieldMapping's write targets and validation exactly, adding the Tier-1
-// alias value transform and (when resolved is populated) Resolver (secretRef/apiLookup) values. Tier-2 jq
+// alias value transform and (when resolved is populated) Resolver (secretRef) values. Tier-2 jq
 // is not applied here yet: an entry requesting it is skipped (left unwritten) rather than sent
 // untransformed, matching the response side's precedent for an entry it cannot yet fully honor (a
 // deferred module-ref jq program). A Resolver entry with no matching resolved value (resolved is nil, or

@@ -3,7 +3,6 @@ package fieldmapping
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -69,7 +68,7 @@ func TestResolveRequestResolvers_SecretRef(t *testing.T) {
 		},
 	}
 
-	resolved, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg, nil)
+	resolved, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg)
 	if err != nil {
 		t.Fatalf("ResolveRequestResolvers: %v", err)
 	}
@@ -114,7 +113,7 @@ func TestResolveRequestResolvers_SecretRefArrayPath(t *testing.T) {
 		},
 	}
 
-	resolved, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg, nil)
+	resolved, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg)
 	if err != nil {
 		t.Fatalf("ResolveRequestResolvers: %v", err)
 	}
@@ -143,93 +142,9 @@ func TestResolveRequestResolvers_MissingSecretIsError(t *testing.T) {
 		},
 	}
 
-	_, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg, nil)
+	_, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg)
 	if err == nil {
 		t.Fatal("expected an error when the referenced secret does not exist")
-	}
-}
-
-func TestResolveRequestResolvers_ApiLookupWithoutLookupFnIsError(t *testing.T) {
-	dyn := newFakeClientWithSecret(t, "ns1", "db-creds", "password", "hunter2")
-	mg := mgWithCredsRef("ns1", "db-creds", "password")
-
-	mapping := []getter.FieldMappingItem{
-		{
-			InPath:           "id",
-			InCustomResource: "spec.alias",
-			Resolver: &getter.FieldResolver{
-				Type: "apiLookup",
-				ApiLookup: &getter.APILookupResolver{
-					Action: "findby", RequestParam: "slug", ResponsePath: "id",
-				},
-			},
-		},
-	}
-
-	_, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg, nil)
-	if err == nil {
-		t.Fatal("expected a nil lookupFn (caller doesn't support apiLookup here) to be a hard error, not a silent skip")
-	}
-}
-
-func TestResolveRequestResolvers_ApiLookupDelegatesToLookupFn(t *testing.T) {
-	mg := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{"alias": "my-team-slug"}}}
-
-	mapping := []getter.FieldMappingItem{
-		{
-			InPath:           "id",
-			InCustomResource: "spec.alias",
-			Resolver: &getter.FieldResolver{
-				Type: "apiLookup",
-				ApiLookup: &getter.APILookupResolver{
-					Action: "findby", RequestParam: "slug", ResponsePath: "id",
-				},
-			},
-		},
-	}
-
-	var gotAlias interface{}
-	lookupFn := func(ctx context.Context, r *getter.APILookupResolver, aliasValue interface{}) (interface{}, error) {
-		gotAlias = aliasValue
-		if r.Action != "findby" {
-			t.Fatalf("expected action %q to be passed through, got %q", "findby", r.Action)
-		}
-		return "resolved-id-123", nil
-	}
-
-	resolved, err := ResolveRequestResolvers(context.Background(), nil, mapping, mg, lookupFn)
-	if err != nil {
-		t.Fatalf("ResolveRequestResolvers: %v", err)
-	}
-	if gotAlias != "my-team-slug" {
-		t.Fatalf("expected the alias read from the CR to be passed to lookupFn, got %v", gotAlias)
-	}
-	if resolved[ResolverKey(mapping[0])] != "resolved-id-123" {
-		t.Fatalf("expected the lookupFn's result to be the resolved value, got %v", resolved)
-	}
-}
-
-func TestResolveRequestResolvers_ApiLookupFnErrorPropagates(t *testing.T) {
-	mg := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{"alias": "my-team-slug"}}}
-	mapping := []getter.FieldMappingItem{
-		{
-			InPath:           "id",
-			InCustomResource: "spec.alias",
-			Resolver: &getter.FieldResolver{
-				Type: "apiLookup",
-				ApiLookup: &getter.APILookupResolver{
-					Action: "findby", RequestParam: "slug", ResponsePath: "id",
-				},
-			},
-		},
-	}
-	lookupFn := func(ctx context.Context, r *getter.APILookupResolver, aliasValue interface{}) (interface{}, error) {
-		return nil, fmt.Errorf("lookup failed")
-	}
-
-	_, err := ResolveRequestResolvers(context.Background(), nil, mapping, mg, lookupFn)
-	if err == nil {
-		t.Fatal("expected the lookupFn's error to propagate")
 	}
 }
 
@@ -238,7 +153,7 @@ func TestResolveRequestResolvers_NoResolversIsNilNoError(t *testing.T) {
 	mapping := []getter.FieldMappingItem{
 		{InBody: "name", InCustomResource: "spec.name"},
 	}
-	resolved, err := ResolveRequestResolvers(context.Background(), nil, mapping, mg, nil)
+	resolved, err := ResolveRequestResolvers(context.Background(), nil, mapping, mg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -351,7 +266,7 @@ func TestResolveRequestResolvers_SecretRefDedupedAcrossEntries(t *testing.T) {
 	}
 
 	dyn.Fake.ClearActions()
-	resolved, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg, nil)
+	resolved, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg)
 	if err != nil {
 		t.Fatalf("ResolveRequestResolvers: %v", err)
 	}
@@ -368,40 +283,6 @@ func TestResolveRequestResolvers_SecretRefDedupedAcrossEntries(t *testing.T) {
 	}
 	if gets != 1 {
 		t.Fatalf("expected exactly one secret Get despite two referencing entries, got %d", gets)
-	}
-}
-
-// TestResolveRequestResolvers_ApiLookupDedupedAcrossEntries proves two FieldMapping entries resolving the
-// same action+requestParam+alias trigger exactly one lookupFn call, not one per entry.
-func TestResolveRequestResolvers_ApiLookupDedupedAcrossEntries(t *testing.T) {
-	mg := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{"alias": "my-team-slug"}}}
-
-	sameResolver := &getter.FieldResolver{
-		Type: "apiLookup",
-		ApiLookup: &getter.APILookupResolver{
-			Action: "findby", RequestParam: "slug", ResponsePath: "id",
-		},
-	}
-	mapping := []getter.FieldMappingItem{
-		{InPath: "id", InCustomResource: "spec.alias", Resolver: sameResolver},
-		{InBody: "teamId", InCustomResource: "spec.alias", Resolver: sameResolver},
-	}
-
-	calls := 0
-	lookupFn := func(ctx context.Context, r *getter.APILookupResolver, aliasValue interface{}) (interface{}, error) {
-		calls++
-		return "resolved-id-123", nil
-	}
-
-	resolved, err := ResolveRequestResolvers(context.Background(), nil, mapping, mg, lookupFn)
-	if err != nil {
-		t.Fatalf("ResolveRequestResolvers: %v", err)
-	}
-	if resolved[ResolverKey(mapping[0])] != "resolved-id-123" || resolved[ResolverKey(mapping[1])] != "resolved-id-123" {
-		t.Fatalf("expected both entries to resolve to the same value, got %v", resolved)
-	}
-	if calls != 1 {
-		t.Fatalf("expected exactly one lookupFn call despite two referencing entries, got %d", calls)
 	}
 }
 
@@ -446,7 +327,7 @@ func TestResolveRequestResolvers_DistinctSecretsNotDeduped(t *testing.T) {
 		},
 	}
 
-	resolved, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg, nil)
+	resolved, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg)
 	if err != nil {
 		t.Fatalf("ResolveRequestResolvers: %v", err)
 	}
@@ -475,7 +356,7 @@ func TestResolveSecretRefValueNotLeakedInErrors(t *testing.T) {
 			},
 		},
 	}
-	_, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg, nil)
+	_, err := ResolveRequestResolvers(context.Background(), dyn, mapping, mg)
 	if err == nil {
 		t.Fatal("expected error")
 	}

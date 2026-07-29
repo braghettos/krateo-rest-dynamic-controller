@@ -620,7 +620,7 @@ func TestGetSecret(t *testing.T) {
 	}
 }
 
-// TestFieldResolver_JSONRoundTrip asserts the runtime FieldResolver mirror (both apiLookup and secretRef
+// TestFieldResolver_JSONRoundTrip asserts the runtime FieldResolver mirror (secretRef
 // kinds) deserializes from the same JSON shape oasgen-provider's CRD emits, and round-trips unchanged.
 func TestFieldResolver_JSONRoundTrip(t *testing.T) {
 	item := FieldMappingItem{
@@ -645,23 +645,6 @@ func TestFieldResolver_JSONRoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &back))
 	assert.Equal(t, item, back)
 
-	lookup := FieldMappingItem{
-		InPath:           "id",
-		InCustomResource: "spec.alias",
-		Resolver: &FieldResolver{
-			Type: "apiLookup",
-			ApiLookup: &APILookupResolver{
-				Action:       "findby",
-				RequestParam: "slug",
-				ResponsePath: "id",
-			},
-		},
-	}
-	raw, err = json.Marshal(lookup)
-	require.NoError(t, err)
-	var backLookup FieldMappingItem
-	require.NoError(t, json.Unmarshal(raw, &backLookup))
-	assert.Equal(t, lookup, backLookup)
 }
 
 // TestFieldResolver_OmitEmpty guarantees a FieldMappingItem with no resolver never emits the key, so
