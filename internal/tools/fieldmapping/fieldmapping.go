@@ -3,24 +3,31 @@
 // For the response direction it normalizes the observed API body into the CR-domain shape at the reconcile
 // chokepoint — before status population and drift comparison — so those consumers keep working unchanged.
 //
-// What a valueMapping actually does depends on BOTH the tier and the direction, and the two are not
-// symmetric:
+// What a transform actually does depends on WHERE it is attached, not on whether it is inline or a module
+// reference:
 //
-//	                        alias      jq (inline)   jq (ref: module)
-//	response (API -> CR)    applied    applied       entry unapplied
-//	request  (CR -> API)    applied    ENTRY SKIPPED  entry skipped
+//	                                 alias    jq
+//	per-field, response (API -> CR)  applied  applied
+//	per-field, request  (CR -> API)  applied  ENTRY SKIPPED
+//	responseTransform (whole doc)    n/a      applied
+//	requestTransform  (whole doc)    n/a      NEVER EXECUTED
 //
-// Response-direction handling is resolveResponseEntry in this package; request-direction handling is
-// builder.BuildCallConfig, which calls ApplyAlias with RequestCRToAPI.
+// Inline and ref: are equivalent by the time execution happens: definitiongetter.resolveJQRefs walks every
+// JQProgram on every definition fetch and materializeJQ rewrites Ref into Inline (appending Entrypoint),
+// clearing Ref. The `Inline == ""` guards in this package are therefore a defensive fallback for a program
+// that was never materialized — NOT a statement that module references are unsupported. They are.
 //
-// Both unsupported combinations fail CLOSED rather than passing an untransformed value through, but they
-// fail closed differently and the request one is the sharper edge: a jq valueMapping on a request entry
-// makes the builder skip that mapping entirely, so the target field is not written to the outgoing body at
-// all. A response entry that cannot be transformed is simply left unapplied, which the response path
-// already tolerates.
+// The two gaps above are both silent, and both are worth knowing:
 //
-// Note this is narrower than "jq is unimplemented": inline jq does run, on the response direction. Only the
-// module-reference form (JQProgram.Ref) is unexecuted anywhere.
+//   - A jq valueMapping on a REQUEST entry makes builder.BuildCallConfig skip that mapping entirely, so the
+//     target field never reaches the outgoing body. Failing closed beats sending an untransformed value,
+//     but the field simply vanishing is hard to diagnose from outside.
+//   - requestTransform is parsed, validated by the CRD, and materialized by resolveJQRefs — and then never
+//     run. There is no call site: the jqengine callers are this package (per-field response + document
+//     responseTransform), async.go, and existence.go. Nothing transforms the outgoing body.
+//
+// Request-direction alias handling lives in builder.BuildCallConfig (ApplyAlias with RequestCRToAPI);
+// everything else above is in this package.
 package fieldmapping
 
 import (
