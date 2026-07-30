@@ -40,6 +40,10 @@ type CallInfo struct {
 	Queries             []getter.QueryParam // static per-verb query params to inject on the request
 	TolerateCodes       []int               // status codes treated as a successful empty response for this verb
 	NotFoundCodes       []int               // status codes remapped to a not-found result for this verb
+	// RequestTransform is this verb's whole-document jq program for the outgoing body. It is NOT applied by
+	// BuildCallConfig — that has no context to run jq with — but by the caller, via
+	// fieldmapping.ApplyRequestTransform, after the body is assembled and immediately before the call.
+	RequestTransform *getter.JQProgram
 }
 
 type APIFuncDef func(ctx context.Context, cli *http.Client, path string, conf *restclient.RequestConfiguration) (restclient.Response, error)
@@ -83,6 +87,7 @@ func APICallBuilder(cli restclient.UnstructuredClientInterface, info *getter.Inf
 				Queries:             descr.Queries,
 				TolerateCodes:       descr.TolerateCodes,
 				NotFoundCodes:       descr.NotFoundCodes,
+				RequestTransform:    descr.RequestTransform,
 			}
 
 			switch action {
@@ -101,14 +106,6 @@ func APICallBuilder(cli restclient.UnstructuredClientInterface, info *getter.Inf
 	return nil, nil, nil
 }
 
-// BuildCallConfig builds the request configuration based on the callInfo and the fields from the spec and
-// status of the main resource, the spec of the Configuration CR and also the request field mappings.
-//
-// resolved carries the values already produced by fieldmapping.ResolveRequestResolvers for this same
-// callInfo.FieldMapping slice (keyed by fieldmapping.ResolverKey), for FieldMapping entries whose Resolver
-// (secretRef) needs I/O this synchronous function cannot perform itself. Pass nil at
-// call sites that don't resolve resolvers (e.g. the async/observe paths) — a resolver-bearing entry is
-// then simply skipped rather than sent unresolved.
 // UnresolvedPathParams returns, in order of appearance, the names of the {placeholder} segments in a path
 // template that params does not populate — treating an empty value as unpopulated, since substituting it
 // would silently address a different URL (".../users/" rather than ".../users/{id}").
@@ -136,6 +133,17 @@ func UnresolvedPathParams(path string, params map[string]string) []string {
 	return missing
 }
 
+// BuildCallConfig builds the request configuration based on the callInfo and the fields from the spec and
+// status of the main resource, the spec of the Configuration CR and also the request field mappings.
+//
+// resolved carries the values already produced by fieldmapping.ResolveRequestResolvers for this same
+// callInfo.FieldMapping slice (keyed by fieldmapping.ResolverKey), for FieldMapping entries whose Resolver
+// (secretRef) needs I/O this synchronous function cannot perform itself. Pass nil at
+// call sites that don't resolve resolvers (e.g. the async/observe paths) — a resolver-bearing entry is
+// then simply skipped rather than sent unresolved.
+//
+// It does NOT apply callInfo.RequestTransform: running jq needs a context this function does not take.
+// Callers that send a body apply it afterwards via fieldmapping.ApplyRequestTransform.
 func BuildCallConfig(callInfo *CallInfo, mg *unstructured.Unstructured, configSpec map[string]interface{}, resolved map[string]interface{}) *restclient.RequestConfiguration {
 	if callInfo == nil || mg == nil {
 		return nil

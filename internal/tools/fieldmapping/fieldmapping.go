@@ -10,21 +10,21 @@
 //	per-field, response (API -> CR)  applied  applied
 //	per-field, request  (CR -> API)  applied  ENTRY SKIPPED
 //	responseTransform (whole doc)    n/a      applied
-//	requestTransform  (whole doc)    n/a      NEVER EXECUTED
+//	requestTransform  (whole doc)    n/a      applied
 //
 // Inline and ref: are equivalent by the time execution happens: definitiongetter.resolveJQRefs walks every
 // JQProgram on every definition fetch and materializeJQ rewrites Ref into Inline (appending Entrypoint),
 // clearing Ref. The `Inline == ""` guards in this package are therefore a defensive fallback for a program
 // that was never materialized — NOT a statement that module references are unsupported. They are.
 //
-// The two gaps above are both silent, and both are worth knowing:
+// The one remaining gap is silent and worth knowing:
 //
 //   - A jq valueMapping on a REQUEST entry makes builder.BuildCallConfig skip that mapping entirely, so the
 //     target field never reaches the outgoing body. Failing closed beats sending an untransformed value,
 //     but the field simply vanishing is hard to diagnose from outside.
-//   - requestTransform is parsed, validated by the CRD, and materialized by resolveJQRefs — and then never
-//     run. There is no call site: the jqengine callers are this package (per-field response + document
-//     responseTransform), async.go, and existence.go. Nothing transforms the outgoing body.
+//   - requestTransform is applied by ApplyRequestTransform, called from Create/Update/Delete after the body
+//     is assembled. It was accepted-but-never-run until oasgen-provider#43; oasgen rejected it at admission
+//     in the interim so it could not be a silent no-op.
 //
 // Request-direction alias handling lives in builder.BuildCallConfig (ApplyAlias with RequestCRToAPI);
 // everything else above is in this package.
@@ -295,4 +295,39 @@ func equalPath(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// ApplyRequestTransform runs a whole-document requestTransform over an assembled request body and returns
+// the replacement body. Input '.' is the entire body and the single output replaces it — the request-side
+// mirror of the document responseTransform, and the document-scoped sibling of a per-field jq valueMapping.
+//
+// Ordering is deliberately the inverse of the response side. Going out, the per-field mappings compose the
+// body first and this transform receives the finished article; coming in, the document transform normalizes
+// the payload first and the per-field mappings read the normalized shape. Both directions therefore give
+// the document program the "API-shaped" view.
+//
+// A nil program, or a body with nothing in it, is a no-op: there is nothing to transform, and inventing a
+// body from a jq program that expected one would turn a GET into a request it was never meant to be. A
+// compile or run failure is returned as an error so the caller fails the reconcile — sending a partially
+// transformed body would be worse than not sending one, which is the same call the response path makes.
+//
+// prog.Inline is the only field read: definitiongetter.resolveJQRefs has already materialized any module
+// ref into it by the time a call reaches here.
+func ApplyRequestTransform(ctx context.Context, prog *getter.JQProgram, body interface{}) (interface{}, error) {
+	if prog == nil || prog.Inline == "" {
+		return body, nil
+	}
+	m, ok := body.(map[string]interface{})
+	if !ok || len(m) == 0 {
+		return body, nil
+	}
+	compiled, err := jqengine.Compile(prog.Inline)
+	if err != nil {
+		return nil, fmt.Errorf("compiling requestTransform: %w", err)
+	}
+	out, err := compiled.Run(ctx, body)
+	if err != nil {
+		return nil, fmt.Errorf("running requestTransform: %w", err)
+	}
+	return out, nil
 }

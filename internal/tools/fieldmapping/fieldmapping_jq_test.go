@@ -159,3 +159,59 @@ func TestNormalizeResponseBody_DefaultIfAbsent_Scalar(t *testing.T) {
 	require.NoError(t, NormalizeResponseBody(context.Background(), verbs, []string{"get"}, body))
 	assert.Equal(t, float64(0), body["count"])
 }
+
+// TestApplyRequestTransform covers the outgoing whole-document transform (oasgen-provider#43). Until this
+// landed the field was parsed, validated and materialized, then never run — the request went out as if it
+// were absent.
+func TestApplyRequestTransform(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("rewrites the assembled body", func(t *testing.T) {
+		body := map[string]interface{}{"user": map[string]interface{}{"name": "alice"}, "drop": true}
+		out, err := ApplyRequestTransform(ctx, &getter.JQProgram{Inline: `{name: .user.name}`}, body)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]interface{}{"name": "alice"}, out)
+	})
+
+	t.Run("sees the finished article, so it can act on field-mapped values", func(t *testing.T) {
+		// The ordering contract: per-field mappings compose the body first, this runs on the result.
+		body := map[string]interface{}{"a": 1.0, "b": 2.0}
+		out, err := ApplyRequestTransform(ctx, &getter.JQProgram{Inline: `. + {sum: (.a + .b)}`}, body)
+		require.NoError(t, err)
+		assert.Equal(t, 3.0, out.(map[string]interface{})["sum"])
+	})
+
+	t.Run("nil program is a no-op and returns the same body", func(t *testing.T) {
+		body := map[string]interface{}{"a": 1}
+		out, err := ApplyRequestTransform(ctx, nil, body)
+		require.NoError(t, err)
+		assert.Equal(t, body, out)
+	})
+
+	t.Run("empty body is a no-op: a GET is never given a body it never had", func(t *testing.T) {
+		for _, empty := range []interface{}{nil, map[string]interface{}{}} {
+			out, err := ApplyRequestTransform(ctx, &getter.JQProgram{Inline: `{invented: "body"}`}, empty)
+			require.NoError(t, err)
+			assert.Equal(t, empty, out, "must not invent a body")
+		}
+	})
+
+	t.Run("only Inline is read — refs are materialized upstream", func(t *testing.T) {
+		body := map[string]interface{}{"a": 1}
+		out, err := ApplyRequestTransform(ctx, &getter.JQProgram{Ref: "configmap://ns/cm/m.jq", Entrypoint: "f"}, body)
+		require.NoError(t, err)
+		assert.Equal(t, body, out, "an unmaterialized ref is a no-op here, not an error")
+	})
+
+	t.Run("compile failure is an error, not a silently untransformed body", func(t *testing.T) {
+		_, err := ApplyRequestTransform(ctx, &getter.JQProgram{Inline: `{`}, map[string]interface{}{"a": 1})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "compiling requestTransform")
+	})
+
+	t.Run("run failure is an error", func(t *testing.T) {
+		_, err := ApplyRequestTransform(ctx, &getter.JQProgram{Inline: `.a | tonumber`}, map[string]interface{}{"a": "nope"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "running requestTransform")
+	})
+}

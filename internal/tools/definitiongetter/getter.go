@@ -171,10 +171,9 @@ type VerbsDescription struct {
 	// FieldMapping is the unified request/response field mapping (see FieldMappingItem). Response-direction
 	// entries (inResponse) are applied to the observed body before status population and drift comparison.
 	FieldMapping []FieldMappingItem `json:"fieldMapping,omitempty"`
-	// RequestTransform / ResponseTransform are whole-document jq programs. ResponseTransform is applied by
-	// the jq engine (fieldmapping.NormalizeResponseBody). RequestTransform is NOT: it is accepted by the
-	// CRD and materialized by resolveJQRefs, but no call site ever runs it, so a resource declaring one is
-	// silently not transformed on the way out.
+	// RequestTransform / ResponseTransform are whole-document jq programs, both applied by the jq engine:
+	// ResponseTransform in fieldmapping.NormalizeResponseBody, RequestTransform in
+	// fieldmapping.ApplyRequestTransform (Create/Update/Delete, after the body is assembled).
 	RequestTransform  *JQProgram `json:"requestTransform,omitempty"`
 	ResponseTransform *JQProgram `json:"responseTransform,omitempty"`
 	// IdentifiersMatchPolicy defines how to match identifiers for the 'findby' action. To be set only for 'findby' actions.

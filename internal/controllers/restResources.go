@@ -476,6 +476,17 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 
 	reqConfiguration := builder.BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec, resolved)
+	// Whole-document requestTransform, applied to the assembled body immediately before the call — after the
+	// per-field mappings have composed it, so the program sees the finished article. A failure fails the
+	// reconcile rather than sending a partially transformed body.
+	if reqConfiguration != nil {
+		tb, terr := fieldmapping.ApplyRequestTransform(ctx, callInfo.RequestTransform, reqConfiguration.Body)
+		if terr != nil {
+			log.Error(terr, "Applying requestTransform")
+			return terr
+		}
+		reqConfiguration.Body = tb
+	}
 	response, err := apiCall(ctx, &http.Client{}, callInfo.Path, reqConfiguration)
 	if err != nil {
 		log.Error(err, "Performing REST call")
@@ -633,6 +644,17 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 
 	reqConfiguration := builder.BuildCallConfig(callInfo, mg, clientInfo.ConfigurationSpec, resolved)
+	// Whole-document requestTransform, applied to the assembled body immediately before the call — after the
+	// per-field mappings have composed it, so the program sees the finished article. A failure fails the
+	// reconcile rather than sending a partially transformed body.
+	if reqConfiguration != nil {
+		tb, terr := fieldmapping.ApplyRequestTransform(ctx, callInfo.RequestTransform, reqConfiguration.Body)
+		if terr != nil {
+			log.Error(terr, "Applying requestTransform")
+			return terr
+		}
+		reqConfiguration.Body = tb
+	}
 	response, err := apiCall(ctx, &http.Client{}, callInfo.Path, reqConfiguration)
 	if err != nil {
 		log.Error(err, "Performing REST call")
@@ -851,6 +873,14 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		}
 		return nil
 	}
+
+	tb, terr := fieldmapping.ApplyRequestTransform(ctx, callInfo.RequestTransform, reqConfiguration.Body)
+	if terr != nil {
+		log.Error(terr, "Applying requestTransform")
+		h.eventRecorder.Event(mg, event.Warning(reasonDeleted, "Delete", terr))
+		return terr
+	}
+	reqConfiguration.Body = tb
 
 	response, err := apiCall(ctx, &http.Client{}, callInfo.Path, reqConfiguration)
 	if err != nil {
