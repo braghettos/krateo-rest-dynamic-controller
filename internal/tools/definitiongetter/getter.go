@@ -134,8 +134,11 @@ type SecretRefResolver struct {
 	KeyFromCustomResource string `json:"keyFromCustomResource"`
 }
 
-// ValueMapping is the runtime mirror of a value transform. Tier-1 'alias' is applied by the fieldmapping
-// package; Tier-2 'jq' is carried here but only executed once the jq engine lands.
+// ValueMapping is the runtime mirror of a value transform. Support depends on the tier and the DIRECTION:
+// 'alias' applies both ways; 'jq' applies on the response direction only — a request entry carrying a jq
+// mapping is skipped outright, so the field never reaches the body. Inline and ref: are equivalent here:
+// resolveJQRefs materializes Ref into Inline before anything executes. See the fieldmapping package doc for
+// the full matrix, including requestTransform, which is materialized and then never run.
 type ValueMapping struct {
 	Type    string       `json:"type"`
 	Aliases []ValueAlias `json:"aliases,omitempty"`
@@ -168,7 +171,10 @@ type VerbsDescription struct {
 	// FieldMapping is the unified request/response field mapping (see FieldMappingItem). Response-direction
 	// entries (inResponse) are applied to the observed body before status population and drift comparison.
 	FieldMapping []FieldMappingItem `json:"fieldMapping,omitempty"`
-	// RequestTransform / ResponseTransform are whole-document jq programs applied by the jq engine.
+	// RequestTransform / ResponseTransform are whole-document jq programs. ResponseTransform is applied by
+	// the jq engine (fieldmapping.NormalizeResponseBody). RequestTransform is NOT: it is accepted by the
+	// CRD and materialized by resolveJQRefs, but no call site ever runs it, so a resource declaring one is
+	// silently not transformed on the way out.
 	RequestTransform  *JQProgram `json:"requestTransform,omitempty"`
 	ResponseTransform *JQProgram `json:"responseTransform,omitempty"`
 	// IdentifiersMatchPolicy defines how to match identifiers for the 'findby' action. To be set only for 'findby' actions.

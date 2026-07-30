@@ -2,8 +2,32 @@
 //
 // For the response direction it normalizes the observed API body into the CR-domain shape at the reconcile
 // chokepoint — before status population and drift comparison — so those consumers keep working unchanged.
-// This milestone implements the Tier-1 declarative alias transform; the Tier-2 jq tier is carried in the
-// types but not yet executed (entries with a jq valueMapping are skipped so no partial transform leaks).
+//
+// What a transform actually does depends on WHERE it is attached, not on whether it is inline or a module
+// reference:
+//
+//	                                 alias    jq
+//	per-field, response (API -> CR)  applied  applied
+//	per-field, request  (CR -> API)  applied  ENTRY SKIPPED
+//	responseTransform (whole doc)    n/a      applied
+//	requestTransform  (whole doc)    n/a      NEVER EXECUTED
+//
+// Inline and ref: are equivalent by the time execution happens: definitiongetter.resolveJQRefs walks every
+// JQProgram on every definition fetch and materializeJQ rewrites Ref into Inline (appending Entrypoint),
+// clearing Ref. The `Inline == ""` guards in this package are therefore a defensive fallback for a program
+// that was never materialized — NOT a statement that module references are unsupported. They are.
+//
+// The two gaps above are both silent, and both are worth knowing:
+//
+//   - A jq valueMapping on a REQUEST entry makes builder.BuildCallConfig skip that mapping entirely, so the
+//     target field never reaches the outgoing body. Failing closed beats sending an untransformed value,
+//     but the field simply vanishing is hard to diagnose from outside.
+//   - requestTransform is parsed, validated by the CRD, and materialized by resolveJQRefs — and then never
+//     run. There is no call site: the jqengine callers are this package (per-field response + document
+//     responseTransform), async.go, and existence.go. Nothing transforms the outgoing body.
+//
+// Request-direction alias handling lives in builder.BuildCallConfig (ApplyAlias with RequestCRToAPI);
+// everything else above is in this package.
 package fieldmapping
 
 import (
