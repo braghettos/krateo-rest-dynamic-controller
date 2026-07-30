@@ -134,8 +134,11 @@ type SecretRefResolver struct {
 	KeyFromCustomResource string `json:"keyFromCustomResource"`
 }
 
-// ValueMapping is the runtime mirror of a value transform. Tier-1 'alias' is applied by the fieldmapping
-// package; Tier-2 'jq' is carried here but only executed once the jq engine lands.
+// ValueMapping is the runtime mirror of a value transform. Support depends on the tier AND the direction:
+// 'alias' applies both ways; inline 'jq' applies on the response direction only, where a request entry with
+// a jq mapping is skipped outright (the field never reaches the body); the module-reference form
+// (JQProgram.Ref) is executed nowhere. See the fieldmapping package doc for the full matrix — it is the
+// authoritative statement and this comment is the summary.
 type ValueMapping struct {
 	Type    string       `json:"type"`
 	Aliases []ValueAlias `json:"aliases,omitempty"`

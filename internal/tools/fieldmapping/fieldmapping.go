@@ -2,8 +2,25 @@
 //
 // For the response direction it normalizes the observed API body into the CR-domain shape at the reconcile
 // chokepoint — before status population and drift comparison — so those consumers keep working unchanged.
-// This milestone implements the Tier-1 declarative alias transform; the Tier-2 jq tier is carried in the
-// types but not yet executed (entries with a jq valueMapping are skipped so no partial transform leaks).
+//
+// What a valueMapping actually does depends on BOTH the tier and the direction, and the two are not
+// symmetric:
+//
+//	                        alias      jq (inline)   jq (ref: module)
+//	response (API -> CR)    applied    applied       entry unapplied
+//	request  (CR -> API)    applied    ENTRY SKIPPED  entry skipped
+//
+// Response-direction handling is resolveResponseEntry in this package; request-direction handling is
+// builder.BuildCallConfig, which calls ApplyAlias with RequestCRToAPI.
+//
+// Both unsupported combinations fail CLOSED rather than passing an untransformed value through, but they
+// fail closed differently and the request one is the sharper edge: a jq valueMapping on a request entry
+// makes the builder skip that mapping entirely, so the target field is not written to the outgoing body at
+// all. A response entry that cannot be transformed is simply left unapplied, which the response path
+// already tolerates.
+//
+// Note this is narrower than "jq is unimplemented": inline jq does run, on the response direction. Only the
+// module-reference form (JQProgram.Ref) is unexecuted anywhere.
 package fieldmapping
 
 import (
