@@ -3,6 +3,8 @@
 # byte-for-byte across ALL component repos (no per-repo config); everything is derived from
 # the repo itself.
 #
+#   • test   — the shared suite in test.yaml, gating everything below it. A tag must not be able
+#              to publish an image that fails its own tests.
 #   • build  — ONE multi-platform image (linux/amd64 + linux/arm64) via docker/build-push-action@v7
 #              (QEMU + buildx), tagged from the pushed git tag. Image = ghcr.io/<this repo>.
 #   • crds   — only acts for CRD-owning repos: runs `make generate` (the single agnostic entry
@@ -23,9 +25,16 @@ env:
   GHCR_REPO: ghcr.io/${{ github.repository }}
 
 jobs:
+  # Release gate. Without this a tag published an image that had never run the suite: tests were
+  # bound to pull_request only, so anything reaching main outside a PR was released unverified.
+  test:
+    uses: ./.github/workflows/test.yaml
+    secrets: inherit
+
   build:
     name: Build & push image (multi-platform)
     runs-on: ubuntu-latest
+    needs: [test]
     permissions:
       contents: read
       packages: write

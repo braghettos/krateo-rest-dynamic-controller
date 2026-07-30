@@ -63,18 +63,8 @@ jobs:
           build-args: |
             BUILD_VERSION=${{ github.sha }}
 
+  # The suite itself lives in test.yaml, the single definition shared with the push-to-main trigger
+  # and with release-tag.yaml's release gate — so the three cannot drift apart.
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: Gather dependencies
-        run: go mod download
-      - name: Run coverage
-        run: go test -race -tags=unit,integration -p 1 -coverprofile=coverage.txt -timeout 20m -covermode=atomic ./...
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+    uses: ./.github/workflows/test.yaml
+    secrets: inherit
