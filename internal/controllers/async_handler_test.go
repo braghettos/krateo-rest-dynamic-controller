@@ -177,3 +177,34 @@ func TestDriveAsync_MissingHandle(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "operation handle")
 }
+
+// TestBuildPollRequest_HandleParam covers the declarative binding (oasgen-provider#46): which path
+// parameter receives the async operation handle is declared, not hardcoded, so a vendor OAS that names it
+// something other than operationId works unpatched.
+func TestBuildPollRequest_HandleParam(t *testing.T) {
+	base := &restclient.RequestConfiguration{
+		Parameters: map[string]string{"projectId": "proj-42"},
+		Query:      map[string]string{"api-version": "2024-01-01"},
+	}
+
+	t.Run("declared name receives the handle", func(t *testing.T) {
+		req := buildPollRequest("GET", "id", "op-7", base)
+		assert.Equal(t, "op-7", req.Parameters["id"], "the handle binds to the declared parameter")
+		_, hasDefault := req.Parameters["operationId"]
+		assert.False(t, hasDefault, "the hardcoded name must not be injected when another is declared")
+		assert.Equal(t, "proj-42", req.Parameters["projectId"], "base path params are still inherited")
+	})
+
+	t.Run("empty declaration falls back to operationId", func(t *testing.T) {
+		req := buildPollRequest("GET", "", "op-7", base)
+		assert.Equal(t, "op-7", req.Parameters["operationId"],
+			"every RestDefinition written before handleParam existed must keep working")
+	})
+
+	t.Run("the handle wins over an inherited parameter of the same name", func(t *testing.T) {
+		b := &restclient.RequestConfiguration{Parameters: map[string]string{"id": "the-resource-id"}}
+		req := buildPollRequest("GET", "id", "op-7", b)
+		assert.Equal(t, "op-7", req.Parameters["id"],
+			"the poll addresses the OPERATION, not the resource: the handle must not be shadowed")
+	})
+}

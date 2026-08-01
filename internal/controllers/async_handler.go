@@ -69,7 +69,7 @@ func driveAsync(ctx context.Context, cli restclient.UnstructuredClientInterface,
 	// an auth header) still validates. The extracted {operationId} path param takes precedence.
 	pollClient := &http.Client{Timeout: async.RequestTimeout}
 	poll := func(ctx context.Context, id string) (string, error) {
-		pollReq := buildPollRequest(cfg.Poll.Method, id, triggerReq)
+		pollReq := buildPollRequest(cfg.Poll.Method, cfg.Poll.HandleParam, id, triggerReq)
 		resp, perr := cli.Call(ctx, pollClient, cfg.Poll.Path, pollReq)
 		if perr != nil {
 			return "", perr
@@ -113,11 +113,24 @@ func driveAsync(ctx context.Context, cli restclient.UnstructuredClientInterface,
 // (nil-safe) so a poll endpoint sharing a required input with base still validates. base is the trigger
 // request (Model A) or the get request (Model B) — both resolve the same shared params (e.g. {organization},
 // ?api-version). The maps are copied so the poll request never mutates base's shared maps.
-func buildPollRequest(pollMethod, operationID string, base *restclient.RequestConfiguration) *restclient.RequestConfiguration {
+// defaultHandleParam is the path-parameter name the async operation handle binds to when a RestDefinition
+// does not declare poll.handleParam. It is the name every configuration written before that field existed
+// relies on, so it stays the default rather than becoming required.
+//
+// Note it is NOT the OAS `operationId` keyword, despite the spelling: that identifies an operation
+// definition and is optional in OAS; this is the name of a PATH PARAMETER. Hardcoding it used to force the
+// OAS document to spell the poll endpoint's parameter "operationId" — vendor specs name it whatever they
+// like (Aruba's baremetal API uses .../monitor/{id}) and had to be patched to work.
+const defaultHandleParam = "operationId"
+
+func buildPollRequest(pollMethod, handleParam, operationID string, base *restclient.RequestConfiguration) *restclient.RequestConfiguration {
 	if pollMethod == "" {
 		pollMethod = "GET"
 	}
-	params := map[string]string{"operationId": operationID}
+	if handleParam == "" {
+		handleParam = defaultHandleParam
+	}
+	params := map[string]string{handleParam: operationID}
 	if base != nil {
 		for k, v := range base.Parameters {
 			if _, exists := params[k]; !exists {
