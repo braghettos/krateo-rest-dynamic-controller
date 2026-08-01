@@ -153,7 +153,7 @@ func pollBaseFromRecord(cli restclient.UnstructuredClientInterface, clientInfo *
 // the observed status, binding the recorded shared inputs plus the extracted {operationId}.
 func pollAsyncOnce(ctx context.Context, cli restclient.UnstructuredClientInterface, clientInfo *getter.Info, mg *unstructured.Unstructured, cfg *getter.AsyncConfig, operationID string) (async.PollOutcome, string, error) {
 	base := pollBaseFromRecord(cli, clientInfo, mg)
-	pollReq := buildPollRequest(cfg.Poll.Method, operationID, base)
+	pollReq := buildPollRequest(cfg.Poll.Method, cfg.Poll.HandleParam, operationID, base)
 	resp, err := cli.Call(ctx, &http.Client{Timeout: async.RequestTimeout}, cfg.Poll.Path, pollReq)
 	if err != nil {
 		return async.OutcomePending, "", err

@@ -239,6 +239,11 @@ type OperationRef struct {
 type PollConfig struct {
 	Method          string   `json:"method,omitempty"`
 	Path            string   `json:"path"`
+	// HandleParam is the NAME of the path parameter in Path that receives the extracted async operation
+	// handle. Defaults to "operationId" when empty, which is what every RestDefinition written before this
+	// field existed relies on. It has nothing to do with the OAS `operationId` keyword — that identifies an
+	// operation definition; this names a path parameter.
+	HandleParam     string   `json:"handleParam,omitempty"`
 	StatusPath      string   `json:"statusPath"`
 	SuccessValues   []string `json:"successValues"`
 	FailureValues   []string `json:"failureValues,omitempty"`
