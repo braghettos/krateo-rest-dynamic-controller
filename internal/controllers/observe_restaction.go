@@ -40,7 +40,7 @@ func (h *handler) observeViaRestAction(ctx context.Context, mg *unstructured.Uns
 		return controller.ExternalObservation{}, false, nil
 	}
 
-	extras := buildExtras(mg, ref.Extras, identifiers, false)
+	extras := buildExtras(mg, ref.Extras, identifiers)
 	result, err := h.snowplowClient.Resolve(ctx, snowplow.ApiRef{Name: ref.Name, Namespace: ref.Namespace}, extras)
 	if err != nil {
 		log.Error(err, "Resolving observe RESTAction", "restAction", ref.Namespace+"/"+ref.Name)
@@ -100,12 +100,26 @@ func (h *handler) observeViaRestAction(ctx context.Context, mg *unstructured.Uns
 }
 
 // buildExtras builds the request extras passed to snowplow: the RESTAction's static extras form the base,
-// and the per-instance context is layered on top and WINS on conflict. The per-instance context is always
-// the resource's name/namespace/uid plus the values of its declared IDENTIFIERS (resolved from spec, else
-// status). includeSpec additionally forwards the WHOLE spec — needed by the create RESTAction (the desired
-// state), but never for observe/delete (which only need to locate the resource), so those keep the payload
-// small and free of arbitrary spec data.
-func buildExtras(mg *unstructured.Unstructured, static map[string]interface{}, identifiers []string, includeSpec bool) map[string]any {
+// and the per-instance context is layered on top and WINS on conflict. The per-instance context is the
+// resource's name/namespace/uid, the values of its declared IDENTIFIERS (resolved from spec, else status),
+// and the WHOLE spec under "spec".
+//
+// The spec goes to EVERY direction, not just create/update. It used to be withheld from observe and delete
+// on the reasoning that they "only need to locate the resource" — but locating it is exactly what needs the
+// spec: an API whose URLs are parent-scoped (/projects/{projectId}/...) keeps that scope in a plain spec
+// field, which is not an identifier (making it one would corrupt findby matching under the default OR
+// policy) and is not derivable from name/namespace/uid.
+//
+// Withholding it produced a silent deadlock rather than an error (issue #41). A delete RESTAction written
+// naturally against .spec.* — mirroring its own create/update siblings, where .spec.* is legitimate — saw
+// nulls, its guard iterators yielded nothing, every step skipped, snowplow returned 200, and
+// mutateViaRestAction returned nil. The caller's externalResourceStillExists check then found the resource
+// alive and never released the finalizer, with no error naming the cause. The CR hung in Deleting forever.
+//
+// The CR exists in all three directions — on delete the finalizer guarantees it — so there is nothing to
+// withhold. Payload size is the only cost, and a spec that is too large to forward would already be too
+// large to reconcile.
+func buildExtras(mg *unstructured.Unstructured, static map[string]interface{}, identifiers []string) map[string]any {
 	out := make(map[string]any, len(static)+len(identifiers)+4)
 	for k, v := range static {
 		out[k] = v
@@ -126,10 +140,8 @@ func buildExtras(mg *unstructured.Unstructured, static map[string]interface{}, i
 			out[id] = v
 		}
 	}
-	if includeSpec {
-		if spec, found, _ := unstructured.NestedMap(mg.Object, "spec"); found {
-			out["spec"] = spec
-		}
+	if spec, found, _ := unstructured.NestedMap(mg.Object, "spec"); found {
+		out["spec"] = spec
 	}
 	return out
 }
