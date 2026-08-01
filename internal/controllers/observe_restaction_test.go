@@ -8,15 +8,14 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func TestBuildExtras_ObserveNoSpec(t *testing.T) {
+func TestBuildExtras_StaticIdentifiersAndSpec(t *testing.T) {
 	mg := &unstructured.Unstructured{Object: map[string]interface{}{
 		"metadata": map[string]interface{}{"name": "r1", "namespace": "demo", "uid": "u-1"},
 		"spec":     map[string]interface{}{"id": "spec-id", "size": "large"},
 		"status":   map[string]interface{}{"region": "eu"},
 	}}
 
-	// observe/delete path: includeSpec=false
-	extras := buildExtras(mg, map[string]interface{}{"apiVersion": "7.0", "name": "STATIC"}, []string{"id", "region"}, false)
+	extras := buildExtras(mg, map[string]interface{}{"apiVersion": "7.0", "name": "STATIC"}, []string{"id", "region"})
 
 	// per-instance context is layered on top and wins over static
 	assert.Equal(t, "r1", extras["name"], "per-instance name wins over static")
@@ -24,22 +23,20 @@ func TestBuildExtras_ObserveNoSpec(t *testing.T) {
 	assert.Equal(t, "u-1", extras["uid"])
 	assert.Equal(t, "7.0", extras["apiVersion"], "static extra preserved")
 
-	// identifiers are forwarded (spec first, then status) — NOT the whole spec
+	// identifiers are forwarded dot-keyed (spec first, then status), alongside the whole spec
 	assert.Equal(t, "spec-id", extras["id"], "identifier resolved from spec")
 	assert.Equal(t, "eu", extras["region"], "identifier resolved from status when absent in spec")
-	_, hasSpec := extras["spec"]
-	assert.False(t, hasSpec, "the whole spec is never forwarded on the observe/delete path")
-	_, hasSize := extras["size"]
-	assert.False(t, hasSize, "a non-identifier spec field is not forwarded")
+	spec, ok := extras["spec"].(map[string]interface{})
+	require.True(t, ok, "the whole spec is forwarded in every direction (#41)")
+	assert.Equal(t, "large", spec["size"], "a non-identifier spec field is reachable via .spec")
 }
 
-func TestBuildExtras_CreateIncludesSpec(t *testing.T) {
+func TestBuildExtras_WholeSpecForwarded(t *testing.T) {
 	mg := &unstructured.Unstructured{Object: map[string]interface{}{
 		"metadata": map[string]interface{}{"name": "r1", "namespace": "demo"},
 		"spec":     map[string]interface{}{"size": "large", "region": "eu"},
 	}}
-	// create path: includeSpec=true — the desired state must reach the RESTAction
-	extras := buildExtras(mg, nil, nil, true)
+	extras := buildExtras(mg, nil, nil)
 	assert.Equal(t, "r1", extras["name"])
 	spec, ok := extras["spec"].(map[string]interface{})
 	require.True(t, ok, "whole spec forwarded on the create path")
@@ -51,13 +48,15 @@ func TestBuildExtras_NilStaticNoIdentifiers(t *testing.T) {
 		"metadata": map[string]interface{}{"name": "r1", "namespace": "demo"},
 		"spec":     map[string]interface{}{"secret": "do-not-send"},
 	}}
-	extras := buildExtras(mg, nil, nil, false)
+	extras := buildExtras(mg, nil, nil)
 	assert.Equal(t, "r1", extras["name"])
 	assert.Equal(t, "demo", extras["namespace"])
-	_, hasSpec := extras["spec"]
-	assert.False(t, hasSpec, "no spec forwarded on the observe path")
-	_, hasSecret := extras["secret"]
-	assert.False(t, hasSecret)
+	spec, ok := extras["spec"].(map[string]interface{})
+	require.True(t, ok, "spec forwarded in every direction")
+	assert.Equal(t, "do-not-send", spec["secret"],
+		"withholding spec here never protected anything: the create direction already forwards the identical spec")
+	_, hasSecretTopLevel := extras["secret"]
+	assert.False(t, hasSecretTopLevel, "spec fields are namespaced under .spec, not hoisted to the top level")
 }
 
 func TestWriteObservedStatus(t *testing.T) {
@@ -100,4 +99,26 @@ func TestWriteObservedStatus_NoPriorStatus(t *testing.T) {
 	phase, found, _ := unstructured.NestedString(mg.Object, "status", "phase")
 	assert.True(t, found)
 	assert.Equal(t, "ok", phase)
+}
+
+// TestBuildExtras_ParentScopingFieldReachesDelete is the regression for #41: a delete RESTAction on a
+// parent-scoped API needs a spec field that is NOT an identifier. Withholding the spec made that field
+// unreachable, and the failure was a silent finalizer deadlock rather than an error — the RESTAction's
+// guards saw nulls, every step skipped, snowplow returned 200, and the caller's existence check then kept
+// the finalizer forever.
+func TestBuildExtras_ParentScopingFieldReachesDelete(t *testing.T) {
+	mg := &unstructured.Unstructured{Object: map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "srv-1", "namespace": "demo", "uid": "u-9"},
+		// projectId scopes every URL (/projects/{projectId}/...) but must not be an identifier:
+		// under the default OR findby policy it would match every server in the project.
+		"spec": map[string]interface{}{"projectId": "proj-42", "name": "srv-1"},
+	}}
+
+	extras := buildExtras(mg, nil, []string{"name"})
+
+	spec, ok := extras["spec"].(map[string]interface{})
+	require.True(t, ok, "delete must receive the spec")
+	assert.Equal(t, "proj-42", spec["projectId"],
+		"the parent-scoping field must be reachable as .spec.projectId without being an identifier")
+	assert.Equal(t, "srv-1", extras["name"], "identifier still forwarded dot-keyed as before")
 }

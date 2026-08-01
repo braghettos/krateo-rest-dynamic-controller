@@ -31,10 +31,12 @@ func (h *handler) mutateViaRestAction(ctx context.Context, mg *unstructured.Unst
 	if h.snowplowClient == nil {
 		return fmt.Errorf("resource declares %sApiRef %s/%s but no snowplow client is configured (set the snowplow/authn URLs)", action, ref.Namespace, ref.Name)
 	}
-	// create/update apply the DESIRED state, so they forward the whole spec and project the composed result;
-	// delete only needs to locate the resource (identifiers) and returns nothing to project.
+	// writesDesiredState governs only whether the RESTAction's RESULT is projected into status: create and
+	// update compose the observed resource, delete returns nothing to project. It deliberately no longer
+	// governs what the RESTAction RECEIVES — buildExtras forwards the spec in every direction, because
+	// locating a resource on a parent-scoped API needs spec fields that are not identifiers (issue #41).
 	writesDesiredState := strings.EqualFold(action, "create") || strings.EqualFold(action, "update")
-	extras := buildExtras(mg, ref.Extras, identifiers, writesDesiredState)
+	extras := buildExtras(mg, ref.Extras, identifiers)
 	result, err := h.snowplowClient.Resolve(ctx, snowplow.ApiRef{Name: ref.Name, Namespace: ref.Namespace}, extras)
 	if err != nil {
 		return fmt.Errorf("resolving %s RESTAction %s/%s: %w", action, ref.Namespace, ref.Name, err)
