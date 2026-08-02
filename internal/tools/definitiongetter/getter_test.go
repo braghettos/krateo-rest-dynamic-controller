@@ -435,7 +435,9 @@ func TestDynamicGetter_Get(t *testing.T) {
 					"metadata":   map[string]interface{}{"name": "test-config-unsupported", "namespace": "default"},
 					"spec": map[string]interface{}{
 						"authentication": map[string]interface{}{
-							"apiKey": map[string]interface{}{},
+							// oauth2 rather than apiKey: apiKey became a SUPPORTED type in
+							// oasgen-provider#49, so it no longer exercises the unsupported path.
+							"oauth2": map[string]interface{}{},
 						},
 					},
 				}},
@@ -447,7 +449,7 @@ func TestDynamicGetter_Get(t *testing.T) {
 					Return(schema.GroupVersionResource{Group: "test.io", Version: "v1alpha1", Resource: "testresourceconfigurations"}, nil)
 			},
 			wantErr:        true,
-			wantErrMessage: "unknown auth type: apiKey",
+			wantErrMessage: "unknown auth type: oauth2",
 		},
 		{
 			name: "error when RestDefinition resource has wrong data type",

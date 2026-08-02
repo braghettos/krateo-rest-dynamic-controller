@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/auth"
 	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/jqmodule"
@@ -631,6 +632,47 @@ func parseAuthentication(authMethods map[string]interface{}, dyn dynamic.Interfa
 
 			info.SetAuth = func(req *http.Request) {
 				req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+			}
+			return nil
+
+		case auth.AuthTypeAPIKey:
+			// An OAS `apiKey` scheme sends the credential VERBATIM in a header the document names. Neither
+			// the header nor any prefix can be read from the document here — this package never parses the
+			// OAS (DocScheme is built later, on the client) — so oasgen carries both onto the Configuration
+			// CR and they are read back out of it.
+			tokenRef, ok, err := unstructured.NestedStringMap(authMethodMap, "tokenRef")
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("missing tokenRef in apiKey auth")
+			}
+			header, _, err := unstructured.NestedString(authMethodMap, "header")
+			if err != nil {
+				return err
+			}
+			// An empty header is rejected rather than defaulted: http.Header.Set("") silently produces a
+			// malformed request, so guessing "Authorization" here would turn a configuration mistake into a
+			// wrong-but-plausible call. oasgen defaults this field when the document is unambiguous.
+			if strings.TrimSpace(header) == "" {
+				return fmt.Errorf("missing header in apiKey auth: the header name the credential is sent in must be set")
+			}
+			// Optional; empty means send the credential exactly as stored, which is what apiKey means.
+			valuePrefix, _, err := unstructured.NestedString(authMethodMap, "valuePrefix")
+			if err != nil {
+				return err
+			}
+			token, err := GetSecret(context.Background(), dyn, SecretKeySelector{
+				Name:      tokenRef["name"],
+				Namespace: tokenRef["namespace"],
+				Key:       tokenRef["key"],
+			})
+			if err != nil {
+				return err
+			}
+
+			info.SetAuth = func(req *http.Request) {
+				req.Header.Set(header, valuePrefix+token)
 			}
 			return nil
 		}
