@@ -559,6 +559,60 @@ func TestGetSecret(t *testing.T) {
 			wantErr:   false,
 		},
 		{
+			// The regression this trimming exists for: `jq -r ... > file` (and echo,
+			// and most editors) append a newline, `kubectl create secret --from-file`
+			// preserves it, and untrimmed it reaches http.Header.Set as
+			//   net/http: invalid header field value for "Authorization"
+			name: "trailing newline is trimmed",
+			secret: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Secret",
+					"metadata":   map[string]interface{}{"name": "test-secret", "namespace": "default"},
+					"data": map[string]interface{}{
+						"key": base64.StdEncoding.EncodeToString([]byte("secret-value\n")),
+					},
+				},
+			},
+			selector:  SecretKeySelector{Name: "test-secret", Namespace: "default", Key: "key"},
+			wantValue: "secret-value",
+			wantErr:   false,
+		},
+		{
+			name: "surrounding whitespace is trimmed",
+			secret: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Secret",
+					"metadata":   map[string]interface{}{"name": "test-secret", "namespace": "default"},
+					"data": map[string]interface{}{
+						"key": base64.StdEncoding.EncodeToString([]byte("  secret-value\r\n\t")),
+					},
+				},
+			},
+			selector:  SecretKeySelector{Name: "test-secret", Namespace: "default", Key: "key"},
+			wantValue: "secret-value",
+			wantErr:   false,
+		},
+		{
+			// Interior whitespace is left alone: it can be meaningful (a basic-auth
+			// password may legitimately contain a space) and it does not break a header.
+			name: "interior whitespace is preserved",
+			secret: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Secret",
+					"metadata":   map[string]interface{}{"name": "test-secret", "namespace": "default"},
+					"data": map[string]interface{}{
+						"key": base64.StdEncoding.EncodeToString([]byte("pass word\n")),
+					},
+				},
+			},
+			selector:  SecretKeySelector{Name: "test-secret", Namespace: "default", Key: "key"},
+			wantValue: "pass word",
+			wantErr:   false,
+		},
+		{
 			name:   "secret not found",
 			secret: nil,
 			selector: SecretKeySelector{

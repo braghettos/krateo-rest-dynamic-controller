@@ -716,5 +716,22 @@ func GetSecret(ctx context.Context, client dynamic.Interface, secretKeySelector 
 	if err != nil {
 		return "", fmt.Errorf("failed to decode secret key: %w", err)
 	}
-	return string(bkey), nil
+	// Trim surrounding whitespace. Every caller of GetSecret uses the value as a
+	// credential -- a basic username/password, a bearer token or an apiKey -- and
+	// leading or trailing whitespace is never part of one. It is, however, the
+	// DEFAULT outcome of most ways of producing a Secret: `jq -r ... > file`,
+	// `echo`, and virtually every text editor append a newline, and
+	// `kubectl create secret --from-file` preserves it faithfully.
+	//
+	// Untrimmed, that newline reaches http.Header.Set and Go rejects the entire
+	// request with an error that names neither the credential nor the cause:
+	//
+	//	net/http: invalid header field value for "Authorization"
+	//
+	// The Secret looks correct under every normal inspection -- the trailing 0a is
+	// only visible under xxd -- so the natural first suspicion is the endpoint or
+	// an expired token, not an invisible byte. Trimming cannot discard meaningful
+	// input, whereas not trimming turns a near-universal authoring accident into
+	// an opaque and permanent reconcile failure.
+	return strings.TrimSpace(string(bkey)), nil
 }
