@@ -1,4 +1,4 @@
-module github.com/krateoplatformops/rest-dynamic-controller
+module github.com/krateo-platformops/rest-dynamic-controller
 
 go 1.25.6
 
@@ -8,8 +8,8 @@ require (
 	github.com/gobuffalo/flect v1.0.3
 	github.com/google/go-cmp v0.7.0
 	github.com/itchyny/gojq v0.12.19
-	github.com/krateoplatformops/plumbing v1.12.0
-	github.com/krateoplatformops/unstructured-runtime v1.0.0
+	github.com/krateo-platformops/plumbing v1.13.0
+	github.com/krateo-platformops/unstructured-runtime v1.4.0
 	github.com/pb33f/libopenapi v0.28.0
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0
@@ -107,7 +107,3 @@ require (
 )
 
 replace github.com/pb33f/libopenapi => github.com/krateoplatformops/libopenapi v0.21.8
-
-replace github.com/krateoplatformops/unstructured-runtime => github.com/braghettos/unstructured-runtime v1.3.4
-
-replace github.com/krateoplatformops/plumbing => github.com/braghettos/plumbing v1.12.0

@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/auth"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/jqmodule"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/auth"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/jqmodule"
+	"github.com/krateo-platformops/unstructured-runtime/pkg/pluralizer"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"

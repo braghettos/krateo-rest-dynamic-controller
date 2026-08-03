@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/jqengine"
+	getter "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/jqengine"
 )
 
 // notFoundBodyForAction returns the NotFoundBody predicate declared on the verb matching action, or nil.

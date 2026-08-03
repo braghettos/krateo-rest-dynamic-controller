@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	getter "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/definitiongetter"
 	"github.com/stretchr/testify/assert"
 )
 

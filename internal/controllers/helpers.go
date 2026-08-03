@@ -3,11 +3,11 @@ package restResources
 import (
 	"fmt"
 
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/comparison"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/deepcopy"
-	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/pathparsing"
-	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/comparison"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/deepcopy"
+	getter "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/pathparsing"
+	unstructuredtools "github.com/krateo-platformops/unstructured-runtime/pkg/tools/unstructured"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 

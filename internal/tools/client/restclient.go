@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/pagination"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/pathparsing"
+	getter "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/pagination"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/pathparsing"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	rawyaml "gopkg.in/yaml.v3"
 

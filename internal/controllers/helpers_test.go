@@ -3,7 +3,7 @@ package restResources
 import (
 	"testing"
 
-	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	getter "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/definitiongetter"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/google/go-cmp/cmp"
