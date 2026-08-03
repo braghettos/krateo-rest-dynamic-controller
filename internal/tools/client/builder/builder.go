@@ -6,17 +6,17 @@ import (
 	"net/http"
 	"strings"
 
-	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
+	unstructuredtools "github.com/krateo-platformops/unstructured-runtime/pkg/tools/unstructured"
 
-	restclient "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/deepcopy"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/fieldmapping"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/pathparsing"
+	restclient "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/client"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/deepcopy"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/fieldmapping"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/pathparsing"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/text"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client/apiaction"
-	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/text"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/client/apiaction"
+	getter "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/definitiongetter"
 )
 
 type RequestedParams struct {

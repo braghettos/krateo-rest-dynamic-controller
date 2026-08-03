@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/jqmodule"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/jqmodule"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

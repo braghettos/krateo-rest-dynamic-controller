@@ -1,0 +1,4 @@
+# gitleaks allowlist — VERIFIED FALSE POSITIVES (2026-08-03). testdata/ fixtures — example keys, not live credentials.
+# Precise fingerprints only; new/real secrets in these files are still caught.
+b8448faf89f763a3493a5c6378c491b2bc563fb4:testdata/rest/azuredevops-test/descriptors.yaml:generic-api-key:14
+b8448faf89f763a3493a5c6378c491b2bc563fb4:testdata/rest/azuredevops/descriptors.yaml:generic-api-key:14

@@ -6,13 +6,13 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/async"
-	restclient "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client/apiaction"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client/builder"
-	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/pathparsing"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/async"
+	restclient "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/client"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/client/apiaction"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/client/builder"
+	getter "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/pathparsing"
+	"github.com/krateo-platformops/unstructured-runtime/pkg/logging"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 

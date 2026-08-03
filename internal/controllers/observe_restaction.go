@@ -4,14 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/pathparsing"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/snowplow"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/tools"
-	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured/condition"
+	getter "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/pathparsing"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/snowplow"
+	"github.com/krateo-platformops/unstructured-runtime/pkg/controller"
+	"github.com/krateo-platformops/unstructured-runtime/pkg/logging"
+	"github.com/krateo-platformops/unstructured-runtime/pkg/tools"
+	unstructuredtools "github.com/krateo-platformops/unstructured-runtime/pkg/tools/unstructured"
+	"github.com/krateo-platformops/unstructured-runtime/pkg/tools/unstructured/condition"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 

@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/jqengine"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/pathparsing"
+	getter "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/jqengine"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/pathparsing"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 

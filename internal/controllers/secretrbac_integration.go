@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/fieldmapping"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/secretrbac"
+	getter "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/fieldmapping"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/secretrbac"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 )

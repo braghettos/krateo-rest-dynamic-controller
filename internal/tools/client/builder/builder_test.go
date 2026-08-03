@@ -7,11 +7,11 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/text"
-	restclient "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/client/apiaction"
-	getter "github.com/krateoplatformops/rest-dynamic-controller/internal/tools/definitiongetter"
-	"github.com/krateoplatformops/rest-dynamic-controller/internal/tools/fieldmapping"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/text"
+	restclient "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/client"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/client/apiaction"
+	getter "github.com/krateo-platformops/rest-dynamic-controller/internal/tools/definitiongetter"
+	"github.com/krateo-platformops/rest-dynamic-controller/internal/tools/fieldmapping"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )

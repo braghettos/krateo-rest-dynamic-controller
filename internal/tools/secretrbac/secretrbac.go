@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"hash/fnv"
 
-	"github.com/krateoplatformops/plumbing/kubeutil/objectclient"
-	"github.com/krateoplatformops/plumbing/kubeutil/rbacgen"
+	"github.com/krateo-platformops/plumbing/kubeutil/objectclient"
+	"github.com/krateo-platformops/plumbing/kubeutil/rbacgen"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"

@@ -14,7 +14,7 @@ import (
 
 // meterName is the instrumentation scope for the outbound-REST metrics owned by
 // rest-dynamic-controller (distinct from the runtime's unstructured_runtime.* scope).
-const meterName = "github.com/krateoplatformops/rest-dynamic-controller"
+const meterName = "github.com/krateo-platformops/rest-dynamic-controller"
 
 // Outbound-REST metric instruments. These are registered against the GLOBAL
 // MeterProvider (otel.Meter). unstructured-runtime installs a real
