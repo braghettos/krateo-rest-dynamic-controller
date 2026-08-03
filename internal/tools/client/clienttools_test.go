@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -481,6 +482,140 @@ func TestUnstructuredClient_RequestedBody(t *testing.T) {
 				for _, wantItem := range tt.want {
 					if !got.Contains(wantItem) {
 						t.Errorf("RequestedBody() missing expected item %q", wantItem)
+					}
+				}
+			}
+		})
+	}
+}
+
+// updatableBodySpec mirrors the shape that produced an unfixable drift loop in production
+// (Aruba Cloud Subnet): the CREATE body carries type/default/network, the UPDATE body carries
+// `default` only, and both wrap their fields in the allOf+$ref indirection the real documents use.
+const updatableBodySpec = `
+openapi: 3.0.1
+info: {title: t, version: "1.0.0"}
+paths:
+  /things:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateDto'}
+      responses: {'201': {description: ok}}
+  /things/{id}:
+    put:
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateDto'}
+      responses: {'200': {description: ok}}
+    delete:
+      responses: {'204': {description: ok}}
+components:
+  schemas:
+    CreateDto:
+      allOf:
+        - type: object
+          properties:
+            metadata: {$ref: '#/components/schemas/Meta'}
+            properties: {$ref: '#/components/schemas/CreateProps'}
+    UpdateDto:
+      allOf:
+        - type: object
+          properties:
+            metadata: {$ref: '#/components/schemas/Meta'}
+            properties: {$ref: '#/components/schemas/UpdateProps'}
+    Meta:
+      type: object
+      properties:
+        name: {type: string}
+    CreateProps:
+      type: object
+      properties:
+        type: {type: string}
+        default: {type: boolean}
+        network: {$ref: '#/components/schemas/Network'}
+    UpdateProps:
+      type: object
+      properties:
+        default: {type: boolean}
+    Network:
+      type: object
+      properties:
+        address: {type: string}
+`
+
+func TestUnstructuredClient_UpdatableBodyPaths(t *testing.T) {
+	doc, err := libopenapi.NewDocument([]byte(updatableBodySpec))
+	if err != nil {
+		t.Fatalf("NewDocument() error = %v", err)
+	}
+	v3Doc, errs := doc.BuildV3Model()
+	if len(errs) > 0 {
+		t.Fatalf("BuildV3Model() errors = %v", errs)
+	}
+	client := &UnstructuredClient{DocScheme: v3Doc}
+
+	sorted := func(in []string) []string {
+		out := append([]string(nil), in...)
+		sort.Strings(out)
+		return out
+	}
+
+	tests := []struct {
+		name        string
+		method      string
+		path        string
+		want        []string
+		wantErr     bool
+		mustNotHave []string
+	}{
+		{
+			// The whole point: create-only fields must NOT be comparable, or drift on them
+			// produces an update that cannot carry them and the difference returns forever.
+			name:        "update body yields only its own leaf paths",
+			method:      "PUT",
+			path:        "/things/{id}",
+			want:        []string{"metadata.name", "properties.default"},
+			mustNotHave: []string{"properties.type", "properties.network.address"},
+		},
+		{
+			name:   "create body is richer, proving the asymmetry",
+			method: "POST",
+			path:   "/things",
+			want:   []string{"metadata.name", "properties.default", "properties.network.address", "properties.type"},
+		},
+		{
+			// No body means nothing is fixable by this verb, so nothing is comparable.
+			name:   "operation without a request body yields no comparable fields",
+			method: "DELETE",
+			path:   "/things/{id}",
+			want:   nil,
+		},
+		{name: "unknown path is an error", method: "PUT", path: "/nope", wantErr: true},
+		{name: "unknown method is an error", method: "PATCH", path: "/things/{id}", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := client.UpdatableBodyPaths(tt.method, tt.path)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("UpdatableBodyPaths() expected an error, got none")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("UpdatableBodyPaths() error = %v", err)
+			}
+			if !reflect.DeepEqual(sorted(got), sorted(tt.want)) {
+				t.Errorf("UpdatableBodyPaths() = %v, want %v", sorted(got), sorted(tt.want))
+			}
+			for _, bad := range tt.mustNotHave {
+				for _, g := range got {
+					if g == bad {
+						t.Errorf("UpdatableBodyPaths() returned %q, which the update body cannot express", bad)
 					}
 				}
 			}

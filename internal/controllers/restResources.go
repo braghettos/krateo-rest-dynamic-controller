@@ -368,6 +368,28 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		scopeFields := make([]string, 0, len(clientInfo.Resource.Identifiers)+len(clientInfo.Resource.AdditionalStatusFields))
 		scopeFields = append(scopeFields, clientInfo.Resource.Identifiers...)
 		scopeFields = append(scopeFields, clientInfo.Resource.AdditionalStatusFields...)
+
+		// compareScope: updatable narrows drift to the fields the UPDATE verb's request body can express.
+		// Anything outside that set cannot be fixed by an update, so comparing it would loop: difference
+		// found -> update issued that cannot carry the field -> nothing changes -> difference found again.
+		if clientInfo.Resource.CompareScope == compareScopeUpdatable {
+			var updatable []string
+			var uerr error
+			for _, v := range clientInfo.Resource.VerbsDescription {
+				if !strings.EqualFold(v.Action, string(apiaction.Update)) {
+					continue
+				}
+				updatable, uerr = cli.UpdatableBodyPaths(v.Method, v.Path)
+				break
+			}
+			if uerr != nil {
+				log.Error(uerr, "Deriving updatable fields for drift comparison")
+				return controller.ExternalObservation{}, uerr
+			}
+			// No update verb, or one without a JSON body, means nothing about this resource is
+			// fixable by an update -- so nothing should be reported as drift.
+			scopeFields = updatable
+		}
 		res, err := isCRUpdated(mg, b, clientInfo.Resource.CompareScope, scopeFields)
 		if err != nil {
 			log.Error(err, "Checking if CR is updated")
