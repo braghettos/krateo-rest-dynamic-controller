@@ -228,6 +228,85 @@ func (u *UnstructuredClient) RequestedBody(httpMethod string, path string) (body
 	return bodyParams, nil
 }
 
+// UpdatableBodyPaths returns the dot-notation LEAF paths that the given operation's
+// application/json request body can express, e.g. ["metadata.name", "properties.default"].
+//
+// It exists for drift comparison. A spec field is only FIXABLE if the update verb's body
+// can carry it, so comparing a field outside this set can only produce noise: the
+// controller sees a difference, issues an update that cannot possibly contain the field,
+// nothing changes, and the same difference is found again on the next reconcile — forever.
+//
+// Real example (Aruba Cloud Subnet), where the two schemas are deliberately asymmetric:
+//
+//	create  SubnetPropertiesDto        type, default, network, dhcp
+//	update  SubnetUpdatePropertiesDto  default ONLY
+//
+// The server also assigns the CIDR itself for a Basic subnet, so spec.properties.network
+// virtually always differs from the response — and no update can ever reconcile it.
+//
+// Leaf paths (not intermediate ones) are returned so the projection is precise:
+// "properties.default" must be comparable while its sibling "properties.network" is not.
+// Returns nil when the operation declares no JSON body, which callers must treat as
+// "nothing is updatable" rather than "everything is".
+func (u *UnstructuredClient) UpdatableBodyPaths(httpMethod string, path string) ([]string, error) {
+	if u.DocScheme == nil || u.DocScheme.Model.Paths == nil {
+		return nil, fmt.Errorf("document scheme or model is nil")
+	}
+	pathItem, ok := u.DocScheme.Model.Paths.PathItems.Get(path)
+	if !ok {
+		return nil, fmt.Errorf("path not found: %s", path)
+	}
+	op, ok := pathItem.GetOperations().Get(strings.ToLower(httpMethod))
+	if !ok {
+		return nil, fmt.Errorf("operation not found: %s", httpMethod)
+	}
+	if op.RequestBody == nil || op.RequestBody.Content == nil {
+		return nil, nil
+	}
+	bodySchema, ok := op.RequestBody.Content.Get("application/json")
+	if !ok {
+		return nil, nil
+	}
+	schema, err := bodySchema.Schema.BuildSchema()
+	if err != nil {
+		return nil, fmt.Errorf("building schema for %s: %w", path, err)
+	}
+	var out []string
+	collectLeafPaths(schema, "", &out, 0)
+	return out, nil
+}
+
+// collectLeafPaths walks a request-body schema and appends the dot-notation path of every
+// leaf property to out. allOf is flattened at each level via populateFromAllOf, matching how
+// the rest of this package reads bodies. depth bounds the walk so a self-referential schema
+// cannot loop.
+func collectLeafPaths(schema *base.Schema, prefix string, out *[]string, depth int) {
+	if schema == nil || depth > 20 {
+		return
+	}
+	populateFromAllOf(schema)
+	if schema.Properties == nil || schema.Properties.Len() == 0 {
+		// A leaf: a scalar, an array, or an object with no declared properties (a free-form
+		// map). Free-form maps are compared wholesale, which is correct — the update body
+		// can carry them in their entirety.
+		if prefix != "" {
+			*out = append(*out, prefix)
+		}
+		return
+	}
+	for prop := schema.Properties.First(); prop != nil; prop = prop.Next() {
+		child, err := prop.Value().BuildSchema()
+		if err != nil {
+			continue
+		}
+		next := prop.Key()
+		if prefix != "" {
+			next = prefix + "." + prop.Key()
+		}
+		collectLeafPaths(child, next, out, depth+1)
+	}
+}
+
 // func PopulateFromAllOf() is a method that populates the schema with the properties from the allOf field.
 // the recursive function to populate the schema with the properties from the allOf field.
 func populateFromAllOf(schema *base.Schema) {

@@ -18,10 +18,18 @@ const (
 	// compareScopeIdentifiersAndStatus compares ONLY the identifiers + additionalStatusFields, ignoring the
 	// rest of the spec for drift purposes.
 	compareScopeIdentifiersAndStatus = "identifiersAndStatus"
+	// compareScopeUpdatable compares only those spec fields the UPDATE verb's request body can actually
+	// express. A field the update cannot send is a field the controller cannot fix, so comparing it can only
+	// produce an update that changes nothing and a difference that returns on the next reconcile. This sits
+	// between fullSpec (which loops on server-assigned or create-only fields) and identifiersAndStatus (which
+	// stops comparing almost everything, including drift that IS fixable).
+	compareScopeUpdatable = "updatable"
 )
 
 // isCRUpdated checks if the CR was updated by comparing the fields in the CR with the response from the API call, if existing cr fields are different from the response, it returns false.
-// compareScope selects which spec fields participate: "" / "fullSpec" compares the whole spec; "identifiersAndStatus" restricts the comparison to scopeFields (identifiers + additionalStatusFields).
+// compareScope selects which spec fields participate: "" / "fullSpec" compares the whole spec;
+// "identifiersAndStatus" and "updatable" both restrict the comparison to scopeFields, which the caller has
+// populated accordingly (identifiers + additionalStatusFields, or the update body's expressible paths).
 func isCRUpdated(mg *unstructured.Unstructured, rm map[string]interface{}, compareScope string, scopeFields []string) (comparison.ComparisonResult, error) {
 	//log.Print("isCRUpdated - starting comparison between mg spec and rm")
 	if mg == nil {
@@ -47,7 +55,7 @@ func isCRUpdated(mg *unstructured.Unstructured, rm map[string]interface{}, compa
 
 	// When compareScope restricts drift to the resource's identity + observable-state fields, project the spec
 	// down to just those paths before comparing; everything else in the spec is intentionally ignored for drift.
-	if compareScope == compareScopeIdentifiersAndStatus {
+	if compareScope == compareScopeIdentifiersAndStatus || compareScope == compareScopeUpdatable {
 		m, err = projectSpecFields(m, scopeFields)
 		if err != nil {
 			return comparison.ComparisonResult{
