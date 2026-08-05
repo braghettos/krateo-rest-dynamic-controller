@@ -23,4 +23,7 @@ jobs:
     with:
       module: .
       crd_drift: false
+      test_args: >-
+        -race -tags=unit,integration -p 1 -coverprofile=coverage.txt
+        -timeout 20m -covermode=atomic ./...
     secrets: inherit
