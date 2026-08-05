@@ -15,9 +15,8 @@ jobs:
       contents: read
       packages: write
     with:
-      context: .
+      modules: '[{"mod":"rest-dynamic-controller","context":"."}]'
       push: false
-
   checks:
     uses: krateo-platformops/.github/.github/workflows/component-go-checks.yaml@main
     with:
