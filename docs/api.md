@@ -56,15 +56,20 @@ All credentials are read from Secrets and whitespace-trimmed.
 
 - **status** — the declared `identifiers` and `additionalStatusFields`, projected from
   the (normalized) API response; cleared before repopulation on create/update so stale
-  identifiers can never deadlock reconciliation. Model B async operations also park
-  their operation handle in status until terminal.
+  identifiers can never deadlock reconciliation.
+- **annotations** — an in-flight Model B async operation is persisted as
+  `krateo.io/async-operation-id` / `-action` / `-params` on the CR (the handle, the
+  triggering verb, and the trigger's resolved path/query params re-used verbatim at
+  poll time; auth is deliberately re-applied fresh), removed when the operation
+  terminates (`internal/controllers/async_requeue.go`).
 - **conditions** — a single `Ready` condition with reasons `Available`, `Creating`
   (also used after updates), `Deleting`, `Unavailable` (drift — the reason itself is
   rewritten to a `Resource is not up-to-date due to …` string naming the differing
   field and both values) and the RDC-specific `Pending` (async operation in flight;
   `internal/controllers/condition`).
 - **events** — `ResourceCreated`, `ResourceUpdated`, `ResourceDeleted` (Normal on
-  success, Warning on failure) emitted on the managed CR.
+  success, Warning on failure) and `AsyncOperationFailed` (Warning, when a Model B
+  operation reaches a terminal failure status) emitted on the managed CR.
 
 ## Cluster side effects
 
