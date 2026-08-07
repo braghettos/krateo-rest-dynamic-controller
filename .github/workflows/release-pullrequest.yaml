@@ -1,6 +1,7 @@
 # PR CI via shared reusable workflows (krateo-platformops/.github): a validate-only multi-platform
 # image build (component-image-build, push: false) + Go checks (component-go-checks: unit tests +
-# CRD-drift guard) run from the repo-root module. One source of truth, and go/-fold-safe.
+# CRD-drift guard) run from the repo-root module + the documentation-conformance check
+# (lint-docs: the Krateo Documentation Standard). One source of truth, and go/-fold-safe.
 name: release-pullrequest
 
 on:
@@ -26,3 +27,7 @@ jobs:
         -race -tags=unit,integration -p 1 -coverprofile=coverage.txt
         -timeout 20m -covermode=atomic ./...
     secrets: inherit
+  lint-docs:
+    uses: krateo-platformops/.github/.github/workflows/lint-docs.yaml@main
+    permissions:
+      contents: read

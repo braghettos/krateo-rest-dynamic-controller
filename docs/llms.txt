@@ -1,0 +1,22 @@
+# rest-dynamic-controller — LLM doc index (pinned: 0.20.0)
+# One line per file; regenerate the pin on release. Read files at the tag matching the
+# running image (image tag == repo tag, plain semver, no v prefix). main is ahead of
+# 0.20.0 by the module-identity + shared-CI migration.
+docs/index.md: the map — what RDC is + links to the whole bundle
+docs/overview.md: how one generic binary reconciles arbitrary REST resources — loop, OAS client, auth, drift, async, delegation, secretRef RBAC
+docs/usage.md: how RDC is deployed (installer → oasgen-provider → per-RestDefinition Deployment) + local dev loop
+docs/configuration.md: every flag/env var (verified against main.go) + how oasgen-provider supplies them
+docs/api.md: the executed contract — RestDefinition surface, Configuration auth, status/conditions/events, RBAC side effects, metrics
+docs/examples.md: index of the runnable examples
+docs/release.md: tag → tested multi-platform image → hand-bump of the oasgen-provider chart pin
+docs/log.md: curated history of the 0.x line
+examples/sample-resource/README.md: the full chain on a mock CRUD API — preconditions + commands
+examples/sample-resource/oas-configmap.yaml: the ConfigMap-hosted OpenAPI document (edit servers[0].url)
+examples/sample-resource/restdefinition.yaml: the RestDefinition that generates the Sample CRDs + RDC instance
+examples/sample-resource/resource.yaml: Secret + SampleConfiguration + Sample CR (bearer auth)
+# Code entrypoints (authoritative for internals):
+main.go: flags/env, startup hard-requirements, OTel gating, controller wiring
+internal/controllers/restResources.go: the Observe/Create/Update/Delete handler
+internal/tools/definitiongetter/getter.go: RestDefinition runtime mirror + Configuration/auth parsing
+internal/tools/client/restclient.go: the OAS-driven HTTP client (validation, server override, status-code semantics)
+internal/tools/secretrbac/secretrbac.go: per-CR-instance self-provisioned secretRef RBAC
