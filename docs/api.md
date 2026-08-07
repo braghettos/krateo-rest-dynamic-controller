@@ -59,8 +59,9 @@ All credentials are read from Secrets and whitespace-trimmed.
   identifiers can never deadlock reconciliation. Model B async operations also park
   their operation handle in status until terminal.
 - **conditions** — a single `Ready` condition with reasons `Available`, `Creating`
-  (also used after updates), `Deleting`, `Unavailable` (drift, with the differing
-  field in the message) and the RDC-specific `Pending` (async operation in flight;
+  (also used after updates), `Deleting`, `Unavailable` (drift — the reason itself is
+  rewritten to a `Resource is not up-to-date due to …` string naming the differing
+  field and both values) and the RDC-specific `Pending` (async operation in flight;
   `internal/controllers/condition`).
 - **events** — `ResourceCreated`, `ResourceUpdated`, `ResourceDeleted` (Normal on
   success, Warning on failure) emitted on the managed CR.

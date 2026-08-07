@@ -21,16 +21,18 @@ timestamp: 2026-08-07T00:00:00Z
    git tag X.Y.Z && git push origin X.Y.Z
    ```
 
-3. `release-tag.yaml` then runs, in order:
-   - **test** — the canonical suite (`test.yaml`, `-tags=unit,integration`); a tag
-     cannot publish an image that fails its own tests (0.16.0/0.16.1 once shipped
-     untested; this gate is the fix).
+3. `release-tag.yaml` then runs:
+   - **test** — the canonical suite (`test.yaml`, `-tags=unit,integration`), added
+     as a release gate after 0.16.0/0.16.1 shipped untested (#38). Since the #50
+     migration to the shared build, `build` no longer declares `needs: [test]`: the
+     two jobs start in parallel, so the suite runs on every tag but does not
+     currently block the image push.
    - **build** — the shared reusable multi-platform build
      (`krateo-platformops/.github` `component-image-build.yaml`): one
      linux/amd64 + linux/arm64 image at
      `ghcr.io/krateo-platformops/rest-dynamic-controller:X.Y.Z`.
-   - **crds** — skips cleanly: this repo has no `make generate` target because RDC
-     owns no CRDs.
+   - **crds** — runs after build and skips cleanly: this repo has no `make generate`
+     target because RDC owns no CRDs.
 
 ## Roll out
 

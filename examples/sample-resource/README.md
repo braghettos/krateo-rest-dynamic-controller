@@ -24,7 +24,8 @@ CRUD API, `restdefinition.yaml` makes oasgen-provider generate the `Sample` /
   `http://sample-api.demo-system.svc.cluster.local:30007` — edit it to match your
   endpoint). The reference implementation is bundled in this repo and is what the
   integration suite runs: `go run ./internal/controllers/mockserver` (listens on
-  `:30007`, accepts any bearer token by default).
+  `:30007`; authenticates requests whose bearer token is `test` — exactly what
+  `resource.yaml`'s Secret carries).
 
 ## Run
 

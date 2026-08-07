@@ -45,12 +45,13 @@ timestamp: 2026-08-07T00:00:00Z
 - **0.11.0** — `compareScope: identifiersAndStatus` drift mode.
 - **0.10.0** — the delegation + async wave: `observeApiRef` /
   `createApiRef` / `updateApiRef` / `deleteApiRef` via snowplow `/call` under an
-  authn-issued identity; async Model B (`mode: requeue`) with header-based operation
-  handles; body-based absence via the `notFoundBody` jq predicate; jq module loader
+  authn-issued identity; the async engine — Model A (`blocking`) inline polling plus
+  opt-in Model B (`mode: requeue`) with header-based operation handles; per-verb
+  `successCodes`/`tolerateCodes`/`notFoundCodes` and static headers/queries;
+  body-based absence via the `notFoundBody` jq predicate; jq module loader
   (`ref:` programs); delete holds the finalizer on transient definition-lookup
   failures.
 - **≤0.9.x** — the foundation: the dynamic GVR controller over unstructured-runtime,
   OAS-driven client with request validation, `get`/`findby` observe with
-  `identifiersMatchPolicy` and `continuationToken` pagination, per-verb
-  `successCodes`/`tolerateCodes`/`notFoundCodes`/static headers/queries, async Model A
-  (blocking) engine, basic/bearer auth from `<Kind>Configuration`.
+  `identifiersMatchPolicy` and `continuationToken` pagination, basic/bearer auth from
+  `<Kind>Configuration`.
